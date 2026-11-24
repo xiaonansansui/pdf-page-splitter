@@ -127,9 +127,16 @@ set /p "PICK="
 if "%PICK%"=="1" goto :mode_split
 if "%PICK%"=="2" goto :mode_compress
 if "%PICK%"=="3" goto :mode_watermark
+if "%PICK%"=="4" goto :mode_rename
+if "%PICK%"=="5" goto :mode_office
 if "%PICK%"=="0" goto :cleanup
-if not defined PICK goto :cleanup
-echo [i] please type 1, 2, 3 or 0
+if /i "%PICK%"=="q" goto :cleanup
+if not defined PICK goto :home_retry
+echo [i] please type 1-5, or 0 / q to quit
+goto :home
+
+:home_retry
+echo   [i] please type 1-5, or 0 / q to quit
 goto :home
 
 :mode_split
@@ -165,16 +172,16 @@ echo.
 set "LINE="
 set /p "LINE=PDF: "
 if not defined LINE goto :ask_wm
-if /i "%LINE%"=="q" goto :cleanup
-if "%LINE%"=="0" goto :home
->"%TMPLIST%" echo(%LINE%
-%PY% "%TMPPY%" --scan-watermark --open-preview --from-list "%TMPLIST%"
+set "L2=%LINE:"=%"
+if /i "%L2%"=="q" goto :cleanup
+if "%L2%"=="0" goto :home
+%PY% "%TMPPY%" --scan-watermark --open-preview %LINE%
 if errorlevel 1 goto :ask_wm
 %PY% "%TMPPY%" --wm-confirm
 set "YES="
 set /p "YES="
 if /i not "%YES%"=="y" goto :ask_wm
-%PY% "%TMPPY%" --remove-watermark --from-list "%TMPLIST%"
+%PY% "%TMPPY%" --remove-watermark %LINE%
 echo.
 goto :ask_wm
 
@@ -184,12 +191,15 @@ echo.
 set "LINE="
 set /p "LINE=PDF: "
 if not defined LINE goto :ask_empty
-if /i "%LINE%"=="q" goto :cleanup
-if /i "%LINE%"=="quit" goto :cleanup
-if /i "%LINE%"=="exit" goto :cleanup
-if "%LINE%"=="0" goto :home
-if "%LINE%"=="." goto :run_here
-if /i "%LINE%"=="n" if "%MODEOPT%"=="" goto :namewiz
+rem  strip the quotes first: a dropped path may contain () or & and comparing
+rem  ""C:\a (2)\b.pdf""=="0" would be a cmd syntax error and kill the window
+set "L2=%LINE:"=%"
+if /i "%L2%"=="q" goto :cleanup
+if /i "%L2%"=="quit" goto :cleanup
+if /i "%L2%"=="exit" goto :cleanup
+if "%L2%"=="0" goto :home
+if "%L2%"=="." goto :run_here
+if /i "%L2%"=="n" if "%MODEOPT%"=="" goto :namewiz
 
 rem  The dropped path goes through a manifest file, so & ^ ( ) and spaces in
 rem  a path can not break the command line. A line that only carries options
@@ -209,6 +219,120 @@ set "CWD_DONE=1"
 set "RC=%ERRORLEVEL%"
 goto :ask
 
+:mode_rename
+%PY% "%TMPPY%" --rename-menu
+set "RM="
+set /p "RM="
+if not defined RM goto :mode_rename
+set "RM2=%RM:"=%"
+if "%RM2%"=="0" goto :home
+if /i "%RM2%"=="q" goto :cleanup
+if /i "%RM2%"=="z" goto :rename_undo
+if /i "%RM2%"=="t" goto :rename_tpl
+if /i "%RM2%"=="o" goto :rename_order
+if /i "%RM2%"=="p" goto :rename_preview
+if /i "%RM2%"=="y" goto :rename_apply
+rem  any other input is treated as a path to scan.
+rem  the path is passed straight through as an argument - writing it into a
+rem  manifest with echo would break on & ( ) and other characters in file names.
+%PY% "%TMPPY%" --rename-scan %RM%
+if errorlevel 1 (
+    echo.
+    echo   [i] scan failed - check the path, quote it if it contains spaces
+    set "PAUSE1="
+    set /p "PAUSE1=  press Enter to continue ... "
+)
+echo.
+goto :mode_rename
+
+:rename_preview
+%PY% "%TMPPY%" --rename-show
+echo.
+goto :mode_rename
+
+:rename_undo
+%PY% "%TMPPY%" --rename-undo
+echo.
+goto :mode_rename
+
+:rename_apply
+%PY% "%TMPPY%" --rename-apply
+echo.
+goto :mode_rename
+
+:rename_order
+%PY% "%TMPPY%" --rename-order-prompt
+set "OD="
+set /p "OD="
+if not defined OD goto :mode_rename
+%PY% "%TMPPY%" --rename-order "%OD%"
+echo.
+goto :mode_rename
+
+:rename_tpl
+%PY% "%TMPPY%" --rename-template-menu
+set "TC="
+set /p "TC="
+if "%TC%"=="0" goto :mode_rename
+if "%TC%"=="1" goto :rt_prefix_a
+if "%TC%"=="2" goto :rt_prefix_b
+if "%TC%"=="3" goto :rt_tpl
+goto :mode_rename
+
+:rt_prefix_a
+%PY% "%TMPPY%" --rename-prefix-prompt
+set "PFX="
+set /p "PFX="
+>"%TMPLIST%" echo(%PFX%
+%PY% "%TMPPY%" --rename-mode A --rename-prefix-from "%TMPLIST%"
+echo.
+goto :mode_rename
+
+:rt_prefix_b
+%PY% "%TMPPY%" --rename-prefix-prompt
+set "PFX="
+set /p "PFX="
+>"%TMPLIST%" echo(%PFX%
+%PY% "%TMPPY%" --rename-mode B --rename-prefix-from "%TMPLIST%"
+echo.
+goto :mode_rename
+
+:rt_tpl
+%PY% "%TMPPY%" --rename-tpl-prompt
+set "TPL="
+set /p "TPL="
+>"%TMPLIST%" echo(%TPL%
+%PY% "%TMPPY%" --rename-mode C --rename-tpl-from "%TMPLIST%"
+echo.
+goto :mode_rename
+
+:mode_office
+set "OAPP="
+:office_menu
+%PY% "%TMPPY%" --office-menu
+set "OA="
+set /p "OA="
+if "%OA%"=="0" goto :home
+if /i "%OA%"=="q" goto :cleanup
+if "%OA%"=="1" set "OAPP=word"
+if "%OA%"=="2" set "OAPP=excel"
+if "%OA%"=="3" set "OAPP=ppt"
+if not defined OAPP goto :office_menu
+goto :office_list
+
+:office_list
+%PY% "%TMPPY%" --office-list %OAPP%
+set "ON="
+set /p "ON="
+if not defined ON goto :office_list
+if "%ON%"=="0" goto :mode_office
+if /i "%ON%"=="q" goto :cleanup
+echo %ON%| findstr /r /c:"^[0-9][0-9]*$" >nul
+if errorlevel 1 goto :office_list
+%PY% "%TMPPY%" --office-tip %OAPP% %ON%
+echo.
+goto :office_list
+
 rem  name wizard: the chinese text is printed by the embedded python, cmd only
 rem  reads the choice, so this file can stay pure ascii.
 :namewiz
@@ -220,7 +344,7 @@ if "%CH%"=="2" goto :nz_pdfname
 if "%CH%"=="3" goto :nz_custom
 if "%CH%"=="0" goto :ask
 if not defined CH goto :ask
-echo [i] please type 1, 2, 3 or 0
+echo [i] please type 1, 2, 3, 4, 5 or 0
 goto :namewiz
 
 :nz_default
@@ -302,7 +426,7 @@ endlocal & exit /b %RC%
 
 作者   : 小楠三岁
 GitHub : https://github.com/xiaonansansui
-版本   : 2.5
+版本   : 2.7
 
 用法:
     python 拆分PDF图片.py [PDF或文件夹 ...] [-o 输出目录] [--name 模板]
@@ -315,6 +439,7 @@ GitHub : https://github.com/xiaonansansui
 """
 import hashlib
 import io
+import json
 import os
 import re
 import shlex
@@ -335,7 +460,7 @@ except ImportError:
 TITLE = '拆分PDF图片'
 __author__ = '小楠三岁'
 __github__ = 'https://github.com/xiaonansansui'
-__version__ = '2.5'
+__version__ = '2.7'
 
 OUT_ROOT_NAME = '拆分图片'
 A4_SHORT, A4_LONG = 595.28, 841.89   # A4 短边/长边（pt）
@@ -503,7 +628,7 @@ def print_home():
         '',
         '  ' + paint('拆分PDF图片', '1;36') + paint('  v%s' % __version__, '90')
         + '          ' + paint('小楠三岁 · @xiaonansansui', '90'),
-        '  ' + paint('把 PDF 拆成图片 / 压小 / 去水印', '90'),
+        '  ' + paint('拆图 / 压小 / 去水印 / 批量改名 / 办公疑难速查', '90'),
         '',
         '   ' + paint('[1]', '1;33') + '   拆分 PDF'
         + '     每页大图 → N组.jpg + 同名 A4 PDF',
@@ -511,12 +636,16 @@ def print_home():
         + '     压到指定大小（比如 5 MB）',
         '   ' + paint('[3]', '1;33') + '   去水印'
         + '       删掉每页重复的图片水印（扫描软件加的）',
+        '   ' + paint('[4]', '1;33') + '   批量改名'
+        + '     按模板统一改名（先排顺序，预览后再执行）',
+        '   ' + paint('[5]', '1;33') + '   办公疑难杂症'
+        + '  Word/Excel/PPT 常见坑',
         '',
         '   ' + paint('当前文件名：', '90') + describe_template(tpl),
         '',
     ]
     print(_box(rows))
-    print('  ' + paint('请输入 1 / 2 / 3', '1') + paint('（0 退出）', '90')
+    print('  ' + paint('请输入 1 / 2 / 3 / 4 / 5', '1') + paint('（0 或 q 退出）', '90')
           + paint(' : ', '1'), end='')
 
 
@@ -596,7 +725,662 @@ def print_after_task():
     print(_rule())
 
 
-# ---------- 记住上一次用过的文件名模板 ----------
+# ---------- ④ 批量改名 ----------
+
+RENAME_STATE = os.path.join(tempfile.gettempdir(), 'pdfsplit_rename.json')
+RENAME_LOG_DIR = os.path.join(tempfile.gettempdir(), 'pdfsplit_undo')
+
+
+def _rename_load():
+    try:
+        with open(RENAME_STATE, 'r', encoding='utf-8') as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _rename_save(st):
+    try:
+        with open(RENAME_STATE, 'w', encoding='utf-8') as fh:
+            json.dump(st, fh, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _exif_time(path):
+    try:
+        im = Image.open(path)
+        ex = im.getexif()
+        v = ex.get(36867) or ex.get(306)
+        if v:
+            return time.mktime(time.strptime(str(v)[:19], '%Y:%m:%d %H:%M:%S'))
+    except Exception:
+        pass
+    try:
+        im = Image.open(path)
+        for tag in (36867, 306):
+            v = im._getexif().get(tag) if hasattr(im, '_getexif') else None
+            if v:
+                return time.mktime(time.strptime(str(v)[:19], '%Y:%m:%d %H:%M:%S'))
+    except Exception:
+        pass
+    return None
+
+
+def _name_date(stem):
+    m = re.search(r'(20\d{2})\s*[-_.年/]?\s*(\d{1,2})\s*[-_.月/]?\s*(\d{1,2})'
+                  r'(?:[ T._]+(\d{1,2})[.:：时_](\d{1,2}))?', stem)
+    if not m:
+        return None
+    try:
+        hh = int(m.group(4)) if m.group(4) else 0
+        mm = int(m.group(5)) if m.group(5) else 0
+        return time.mktime((int(m.group(1)), int(m.group(2)), int(m.group(3)), hh, mm, 0, 0, 0, -1))
+    except Exception:
+        return None
+
+
+def _name_seq(stem):
+    for pat in (r'第\s*(\d{1,3})\s*[页張张]', r'(?:^|[_\-\s])(\d{1,4})(?=$|[_\-\s])',
+                r'[（(](\d{1,3})[）)]'):
+        m = re.search(pat, stem)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                pass
+    return None
+
+
+def _collect_files(paths, recurse=False):
+    out = []
+    for p in paths:
+        p = os.path.abspath(p)
+        if os.path.isdir(p):
+            walk = os.walk(p) if recurse else [(p, [], os.listdir(p))]
+            for dirpath, dirs, files in walk:
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for f in files:
+                    if f.startswith('.') or f == '_改名顺序_联系表.png':
+                        continue
+                    out.append(os.path.join(dirpath, f))
+        elif os.path.isfile(p):
+            out.append(p)
+    return out
+
+
+def _scan_items(files):
+    items = []
+    for f in files:
+        stem, ext = os.path.splitext(os.path.basename(f))
+        try:
+            mt = os.path.getmtime(f)
+        except Exception:
+            continue
+        t, src = _name_date(stem), '原名日期'
+        if t is None:
+            t = _exif_time(f)
+            src = 'EXIF' if t else None
+        if t is None:
+            t, src = mt, '修改时间'
+        items.append(dict(path=f, dir=os.path.dirname(f), stem=stem, ext=ext.lower(),
+                          mtime=mt, t=t, src=src, seq=_name_seq(stem)))
+    return items
+
+
+def _sort_items(items):
+    """有页码/序号的优先按序号排，否则按时间；都用名字兜底。"""
+    withseq = [i for i in items if i['seq'] is not None]
+    if len(withseq) >= max(2, int(len(items) * 0.8)):
+        items.sort(key=lambda i: (i['seq'] if i['seq'] is not None else 10 ** 6,
+                                  i['stem']))
+        return '名字里的序号/页码'
+    items.sort(key=lambda i: (i['t'], i['stem']))
+    return '时间（原名日期 → EXIF → 修改时间）'
+
+
+def _contact_sheet(items, out_png, limit=24):
+    cols, cell = 5, 240
+    rows = (min(len(items), limit) + cols - 1) // cols
+    if rows == 0:
+        return None
+    pad, head = 26, 26
+    sheet = Image.new('RGB', (cols * cell, rows * (cell + head) + pad), 'white')
+    from PIL import ImageDraw
+    dr = ImageDraw.Draw(sheet)
+    for idx, it in enumerate(items[:limit]):
+        r, c = divmod(idx, cols)
+        x0, y0 = c * cell, r * (cell + head) + pad
+        dr.rectangle([x0 + 4, y0 + 4, x0 + cell - 4, y0 + cell + head - 4], outline='#cccccc')
+        dr.text((x0 + 8, y0 + 6), '#%02d  %s' % (idx + 1, it['ext'] or 'dir'),
+                fill='#333333')
+        try:
+            if it['ext'] in ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tif', '.tiff'):
+                im = Image.open(it['path'])
+                im.thumbnail((cell - 16, cell - 16))
+                sheet.paste(im.convert('RGB'),
+                            (x0 + (cell - im.width) // 2, y0 + head + (cell - im.height) // 2))
+            else:
+                dr.text((x0 + 12, y0 + head + 90), os.path.basename(it['path'])[:26],
+                        fill='#666666')
+        except Exception:
+            dr.text((x0 + 12, y0 + head + 90), '（无法预览）', fill='#999999')
+        dr.text((x0 + 8, y0 + cell + head - 4),
+                os.path.basename(it['path'])[:30], fill='#000000')
+    sheet.save(out_png)
+    return out_png
+
+
+def _sanitize(name):
+    name = re.sub(r'[\\/:*?"<>|\r\n\t]', '-', name)
+    name = re.sub(r'\s+', ' ', name).strip(' .')
+    return name[:150] or 'file'
+
+
+def _render_name(it, idx, mode, prefix, tpl):
+    if mode == 'A':
+        base = '%s%02d' % (prefix, idx)
+    elif mode == 'B':
+        base = '%s%s' % (prefix, it['stem'])
+    elif mode == 'C':
+        base = (tpl or '')
+        base = base.replace('{nnn}', '%03d' % idx).replace('{nn}', '%02d' % idx)
+        base = base.replace('{n}', str(idx)).replace('{原名}', it['stem'])
+        base = base.replace('{ext}', it['ext'].lstrip('.'))
+        base = base.replace('{日期}', time.strftime('%Y%m%d', time.localtime(it['t'])))
+        base = base.replace('{prefix}', prefix)
+    else:
+        base = it['stem']
+    return _sanitize(base)
+
+
+def _plan(st):
+    items = [st['items'][i] for i in st['order']]
+    used, plan = set(), []
+    seen, n = {}, 0
+    for it in items:
+        key = it['stem'].lower()
+        if key in seen:
+            idx = seen[key]
+        else:
+            n += 1
+            idx = n
+            seen[key] = idx
+        base = _render_name(it, idx, st['mode'], st['prefix'], st['tpl'])
+        name, k = base + it['ext'], 2
+        while name.lower() in used:
+            name = '%s-%d%s' % (base, k, it['ext'])
+            k += 1
+        used.add(name.lower())
+        plan.append((it, os.path.join(it['dir'], name)))
+    return plan
+
+
+def rename_scan(paths, recurse=False, say=print):
+    files = _collect_files(paths, recurse)
+    if not files:
+        say('   没有扫到文件。把文件夹或文件拖进来再回车。')
+        return None
+    items = _scan_items(files)
+    by = _sort_items(items)
+    st = dict(items=items, order=list(range(len(items))), mode='B', prefix='', tpl='',
+              root=os.path.dirname(items[0]['path']) if items else '')
+    _rename_save(st)
+    say('   共 %d 个文件' % len(items))
+    kinds = {}
+    for it in items:
+        kinds[it['ext'] or '(无扩展名)'] = kinds.get(it['ext'] or '(无扩展名)', 0) + 1
+    say('   类型：' + '  '.join('%s×%d' % (k, v) for k, v in sorted(kinds.items())))
+    srcs = {}
+    for it in items:
+        srcs[it['src']] = srcs.get(it['src'], 0) + 1
+    say('   时间依据：' + '  '.join('%s×%d' % (k, v) for k, v in sorted(srcs.items())))
+    say('   排序依据：%s' % by)
+    png = _contact_sheet(items, os.path.join(tempfile.gettempdir(), '改名联系表.png'))
+    if png:
+        say('   联系表：%s' % os.path.basename(png))
+        try:
+            os.startfile(png)
+        except Exception:
+            pass
+    return st
+
+
+def rename_show(st, page=1, per=12, say=print):
+    plan = _plan(st)
+    total = len(plan)
+    pages = max(1, (total + per - 1) // per)
+    page = max(1, min(page, pages))
+    rows = ['', '  ' + paint('改名预览', '1;36') + paint('   第 %d/%d 页   共 %d 个' % (page, pages, total), '90'), '']
+    for i in range((page - 1) * per, min(page * per, total)):
+        it, newp = plan[i]
+        rows.append('   %02d  %s' % (i + 1, os.path.basename(it['path'])))
+        rows.append('     ' + paint('→', '32') + '  ' + os.path.basename(newp))
+    rows.append('')
+    rows.append('  ' + paint('模板：', '90') + _mode_text(st))
+    rows.append('')
+    print(_box(rows))
+
+
+def _mode_text(st):
+    if st['mode'] == 'A':
+        return '前缀 + 两位序号  →  %s01%s' % (st['prefix'] or '', st['items'][0]['ext'] if st['items'] else '')
+    if st['mode'] == 'B':
+        return '前缀 + 原名      →  %s原名%s' % (st['prefix'] or '', st['items'][0]['ext'] if st['items'] else '')
+    if st['mode'] == 'C':
+        return '自定义模板：%s' % st['tpl']
+    return '（未设置）'
+
+
+def rename_apply(st, say=print):
+    plan = _plan(st)
+    os.makedirs(RENAME_LOG_DIR, exist_ok=True)
+    log_path = os.path.join(RENAME_LOG_DIR, 'undo_%s.txt' % time.strftime('%Y%m%d_%H%M%S'))
+    done, skip = [], []
+    for it, newp in plan:
+        old = it['path']
+        if os.path.abspath(old) == os.path.abspath(newp):
+            continue
+        if os.path.exists(newp) and os.path.abspath(newp) != os.path.abspath(old):
+            skip.append((old, '目标已存在'))
+            continue
+        try:
+            if os.path.abspath(old).lower() == os.path.abspath(newp).lower():
+                tmp = old + '.renaming'
+                os.rename(old, tmp)
+                os.rename(tmp, newp)
+            else:
+                os.rename(old, newp)
+            done.append((old, newp))
+        except Exception as exc:
+            skip.append((old, str(exc)))
+    with open(log_path, 'w', encoding='utf-8') as fh:
+        for old, new in done:
+            fh.write('%s\t%s\n' % (old, new))
+    say('   已改名 %d 个' % len(done))
+    if skip:
+        say('   跳过 %d 个：' % len(skip))
+        for old, why in skip[:5]:
+            say('     · %s（%s）' % (os.path.basename(old), why))
+        if len(skip) > 5:
+            say('     · ……还有 %d 个' % (len(skip) - 5))
+    say('   撤销记录：%s' % os.path.basename(log_path))
+    return len(done)
+
+
+def rename_undo(say=print):
+    if not os.path.isdir(RENAME_LOG_DIR):
+        say('   没有可撤销的记录。')
+        return 0
+    logs = sorted(os.listdir(RENAME_LOG_DIR))
+    if not logs:
+        say('   没有可撤销的记录。')
+        return 0
+    latest = os.path.join(RENAME_LOG_DIR, logs[-1])
+    n = 0
+    with open(latest, 'r', encoding='utf-8') as fh:
+        for line in fh:
+            parts = line.rstrip('\n').split('\t')
+            if len(parts) != 2:
+                continue
+            old, new = parts
+            try:
+                if os.path.exists(new) and not os.path.exists(old):
+                    os.rename(new, old)
+                    n += 1
+            except Exception:
+                pass
+    os.remove(latest)
+    say('   已撤销 %d 个改名（记录：%s）' % (n, os.path.basename(latest)))
+    return n
+
+
+def rename_menu():
+    st = _rename_load()
+    rows = ['', '  ' + paint('④ 批量改名', '1;36')
+            + paint('   —   先排好顺序，再套模板统一改名', '90'), '']
+    if st and st.get('items'):
+        rows += ['   已扫描：%d 个文件' % len(st['items']),
+                 '   ' + paint('模板：', '90') + _mode_text(st), '']
+        rows += ['   ' + paint('t', '1;33') + ' 设模板      '
+                 + paint('o', '1;33') + ' 调顺序      '
+                 + paint('p', '1;33') + ' 预览']
+        rows += ['   ' + paint('y', '1;33') + ' 执行改名    '
+                 + paint('z', '1;33') + ' 撤销上一次  '
+                 + paint('0', '1;33') + ' 回主界面', '']
+    else:
+        rows += ['   把文件夹（或一堆文件）拖进窗口，回车开始扫描', '']
+        rows += ['   ' + paint('z', '1;33') + ' 撤销上一次改名    '
+                 + paint('0', '1;33') + ' 回主界面', '']
+    print(_box(rows))
+    print('  ' + paint('输入命令或拖入路径', '1') + paint(' : ', '1'), end='')
+
+
+def rename_template_menu():
+    rows = ['', '  ' + paint('给这批文件起名', '1;36'), '',
+            '   ' + paint('1', '1;33') + '  加前缀 + 两位序号     '
+            + paint('例：构溪社区-1组-01.jpg', '90'),
+            '   ' + paint('2', '1;33') + '  加前缀 + 保留原名     '
+            + paint('例：构溪社区-1组-会议纪要.jpg', '90'),
+            '   ' + paint('3', '1;33') + '  自己写模板            '
+            + paint('{nn} {n} {原名} {日期} {ext}', '90'),
+            '   ' + paint('0', '1;33') + '  取消', '']
+    print(_box(rows))
+    print('  ' + paint('请选择 1 / 2 / 3', '1') + paint(' : ', '1'), end='')
+
+
+def rename_order_prompt():
+    st = _rename_load()
+    n = len(st['items']) if st else 0
+    print('  ' + paint('按联系表输入新顺序（共 %d 个，例如 3 1 5 2）: ' % n, '1'), end='')
+def rename_prefix_prompt():
+    print('  ' + paint('请输入前缀（例如 构溪社区-1组-）: ', '1'), end='')
+
+
+def rename_tpl_prompt():
+    print('  ' + paint('请输入模板（占位符 {nn} {n} {原名} {日期} {ext}）: ', '1'), end='')
+
+
+# ---------- ⑤ 办公软件疑难杂症（纯查询，不动文件） ----------
+
+OFFICE_TIPS = [
+    # ---------------- Word ----------------
+    dict(app='word', title='表格跨页后表头不见了、一行被拦腰截成两页',
+         why='Word 默认既不重复表头，也允许行内跨页断行',
+         how=['选中表格第一行（表头）',
+              '表格工具 → 布局 → 数据 → 勾选「重复标题行」',
+              '选中整张表 → 右键「表格属性」→ 行 → 取消勾选「允许跨页断行」',
+              '还想让单行完整落在一页：选中该行 → 段落 → 换行和分页 → 勾「段中不分页」'],
+         note='表格属性里的“行”那一页才有“允许跨页断行”，别在“表格”页找'),
+    dict(app='word', title='目录页码不对，更新后全乱',
+         why='目录是“域”，正文改动后没更新；或标题没用统一的“标题1/2/3”样式',
+         how=['点一下目录 → 按 F9（或右键 → 更新域）→ 选「更新整个目录」',
+              '正文里的章标题必须用「开始 → 样式」里的 标题1/标题2，手改字号目录认不出',
+              '页码全对但整体偏移：检查分节符，双击页码区确认“链接到前一节”状态'],
+         note='打印前 F9 一次，目录就稳了'),
+    dict(app='word', title='页眉下面那条横线删不掉',
+         why='那不是画线，是“页眉”样式自带的段落下边框',
+         how=['双击进入页眉区域',
+              'Ctrl+A 选中页眉里的空段落',
+              '开始 → 段落 → 边框按钮 → 选「无边框」',
+              '还在：选中段落 → 段落对话框 → 边框和底纹 → 边框 → 无'],
+         note='清掉段落边框就消失，别去删“形状”'),
+    dict(app='word', title='自动编号变成黑方块、或者从 5 开始编',
+         why='编号格式的字体缺失，或该段落的编号续接了上一段列表',
+         how=['全选编号 → 右键「调整列表缩进」/「重新开始于 1」',
+              '字体缺失：全选 → 把编号字体改成 宋体 或 微软雅黑',
+              '彻底治：开始 → 多级列表 → 定义新的多级列表，绑定到标题样式'],
+         note='复制别人文档最容易带进坏编号，粘贴时选「只保留文本」再套样式'),
+    dict(app='word', title='同一份文档，别人电脑打开排版全乱',
+         why='字体没嵌入，对方用了替代字体，行宽和分页全变',
+         how=['交付一律另存为 PDF（文件 → 导出 → 创建 PDF）',
+              '必须给 Word 源文件时：文件 → 选项 → 保存 → 勾「将字体嵌入文件」',
+              '排版别用空格对齐，用制表符/表格/段落缩进'],
+         note='正式材料：Word 里排好 → 导 PDF → 打印/上报都用 PDF'),
+    dict(app='word', title='复制粘贴带进了原格式，整篇样式被搞乱',
+         why='默认粘贴保留源格式',
+         how=['粘贴后点右下角「粘贴选项」→ 选「只保留文本」',
+              '一劳永逸：文件 → 选项 → 高级 → 剪切/复制/粘贴 → 默认粘贴方式改成「仅保留文本」',
+              '已经乱了：Ctrl+A → 开始 → 样式 → 清除格式，再重新套用标题样式'],
+         note='从网页/微信复制最脏，务必走“只保留文本”'),
+    dict(app='word', title='页码从中间某页重新变成 1',
+         why='那页前面插了“分节符（下一页）”，新节的页码默认续不上',
+         how=['双击该页页脚 → 页眉页脚工具 → 页码 → 设置页码格式 → 选「续前节」',
+              '想真正分节但不重置：取消该节页脚的「链接到前一节」再手动设起始页',
+              '检查分节符：开始 → 显示/隐藏编辑标记（¶）'],
+         note='看不到分节符，就是你按了 ¶ 按钮没开'),
+    dict(app='word', title='图片到处乱跑，文字被压住',
+         why='图片环绕方式默认是“嵌入型”以外的浮动方式',
+         how=['点图片 → 布局选项 → 选「嵌入型」（最稳，跟着段落走）',
+              '需要图文混排：选「四周型」并勾「锁定锚点」',
+              '批量：选中图片 → 右键「大小和位置」→ 文字环绕 → 统一设置'],
+         note='报告/公文类材料一律用嵌入型，不然一改字就全乱'),
+    dict(app='word', title='空格删不掉，或者一排字怎么都对不齐',
+         why='混进了全角空格、不间断空格（NBSP）或制表符',
+         how=['开始 → 打开 ¶ 显示编辑标记，看空格到底是什么符号',
+              '查找替换：Ctrl+H，查找框输入 ^s（不间断空格）替换为空',
+              '全角空格：查找框粘贴一个全角空格，替换为空',
+              '对齐别用空格：用制表符 + 标尺上的制表位'],
+         note='公文里“首行缩进 2 字符”用段落设置，不要敲空格'),
+    dict(app='word', title='表格列宽怎么拖都拖不动',
+         why='开启了“根据窗口自动调整”，或单元格里有固定宽度/合并格',
+         how=['表格工具 → 布局 → 自动调整 → 选「固定列宽」再拖',
+              '右键表格属性 → 列 → 取消「指定宽度」的继承值后重新设',
+              '整表拖不动：选中表格 → 右键 → 自动调整 → 根据内容/窗口切换一次'],
+         note='先关掉“自动调整”，再拖边框'),
+    dict(app='word', title='双面打印要留装订线，页码却左右不齐',
+         why='默认页边距是左右对称，双面打印装订侧会吃掉内容',
+         how=['布局 → 页边距 → 自定义边距 → 页码范围 → 多页选「对称页边距」',
+              '装订线设 2.5~3 cm，位置选「左」',
+              '页码放页脚外侧：页脚 → 页码 → 页边距 → 选「外侧」'],
+         note='交给打印店前导一份 PDF，让对方按 PDF 打，别让他“帮你调”'),
+
+    # ---------------- Excel ----------------
+    dict(app='excel', title='身份证号/长数字变成 4.56E+17，后三位变 000',
+         why='Excel 数字精度只有 15 位，超了就被截断并转成科学计数',
+         how=['输入前：把该列设为「文本」格式，或先输一个英文单引号 \'',
+              '已录入的：设成文本后重新输入（改格式不会恢复已丢的位数）',
+              '从别处粘贴：先粘到记事本，再粘进文本格式的列',
+              'CSV 导入时在向导第一步就把该列指定为“文本”'],
+         note='已经被截断的只能重录，数字本身已丢失'),
+    dict(app='excel', title='CSV 双击打开全是乱码',
+         why='Excel 双击按系统默认编码（GBK）读，而文件是 UTF-8',
+         how=['别双击：数据 → 从文本/CSV → 选文件 → 文件原始格式选 65001: Unicode (UTF-8)',
+              '要长期用：另存为 .xlsx，或导出 CSV 时选「CSV UTF-8」',
+              '已经在表格里：数据 → 自文本导入，重建连接'],
+         note='带中文的 CSV 一律走“从文本/CSV”导入'),
+    dict(app='excel', title='筛选之后复制粘贴，粘到了隐藏行上',
+         why='默认复制包含隐藏单元格，粘贴会错位',
+         how=['筛选后：选中区域 → Ctrl+G → 定位条件 → 勾「可见单元格」→ 确定',
+              '再 Ctrl+C 复制，然后粘贴',
+              '或者用 Alt+;（分号）快捷键直接选中可见单元格'],
+         note='Alt+; 是这条的救命键'),
+    dict(app='excel', title='SUM 求和结果是 0，或者合计对不上',
+         why='单元格里的数字其实是文本（带空格、全角、绿色小三角）',
+         how=['选中列 → 数据 → 分列 → 直接点完成（强制转数值）',
+              '或整列乘 1：空白单元格输 1 → 复制 → 选择性粘贴 → 乘',
+              '从系统导出的数据常带前后空格：用 TRIM() 清洗',
+              '看状态栏：选中后状态栏不显示“求和”，就是文本'],
+         note='绿色三角 = 文本型数字，一眼能认'),
+    dict(app='excel', title='合并单元格后不能排序、不能做透视表',
+         why='合并格破坏了“一行一条记录”的结构',
+         how=['取消合并：选中 → 开始 → 合并后居中（点掉）',
+              '空出来的格用「定位条件 → 空值 → =↑ 上一格 → Ctrl+Enter」填充',
+              '只在标题行/表头用合并，数据区永不合并',
+              '已经合并很多：用「开始 → 查找 → 定位 → 空值」批量回填后再排序'],
+         note='数据表的第一原则：一格一个值，不做合并'),
+    dict(app='excel', title='日期显示成 45000 这样的数字',
+         why='单元格格式被设成了“常规/数值”，日期本质是序列号',
+         how=['选中列 → Ctrl+1 → 数字 → 日期 → 选格式',
+              '想自定义：自定义格式输入 yyyy-mm-dd',
+              '导入的数据是文本日期：数据 → 分列 → 第三步选「日期 YMD」'],
+         note='45000 左右 = 2023 年，不是数据错了'),
+    dict(app='excel', title='VLOOKUP 明明有却返回 #N/A',
+         why='两边格式不一致（一边文本一边数值）、或有多余空格、或没锁定查找列',
+         how=['先查格式：=ISNUMBER(A2) 与 =ISNUMBER(查找值) 结果要一致',
+              '清空格：=TRIM(A2)，或查找值套 TRIM',
+              '第四参数写 0（精确匹配）',
+              '区域要用绝对引用：$A$2:$D$100，否则下拉就错位'],
+         note='老版本没有 XLOOKUP，用 IFERROR(VLOOKUP(...),"") 包一层更干净'),
+    dict(app='excel', title='提示“循环引用”，或者公式结果一直是 0',
+         why='公式把自己所在的单元格算进去了',
+         how=['公式 → 错误检查 → 循环引用 → 点它给的位置',
+              '改公式，避开自身单元格',
+              '迭代计算别乱开（文件 → 选项 → 公式），会掩盖真问题'],
+         note='循环引用通常是拉公式时引用范围写错了一格'),
+    dict(app='excel', title='条件格式不生效，或者复制到别的表就错乱',
+         why='规则的作用范围没跟着走，或用了相对引用',
+         how=['开始 → 条件格式 → 管理规则 → 看「应用于」范围对不对',
+              '复制格式用「选择性粘贴 → 格式」，别直接 Ctrl+V',
+              '引用写法：整列规则用 =$A2>100（锁列不锁行）'],
+         note='规则里 $ 的位置决定它能不能整列套用'),
+    dict(app='excel', title='打印出来分页乱七八糟、每页没有表头',
+         why='没设打印区域和顶端标题行',
+         how=['页面布局 → 打印标题 → 顶端标题行选 $1:$1',
+              '页面布局 → 打印区域 → 设置打印区域',
+              '视图 → 分页预览，直接拖蓝线调分页',
+              '缩放：页面布局 → 宽度选「1 页」，高度选「自动」'],
+         note='分页预览里拖蓝线，比猜“缩放到几页”直观'),
+    dict(app='excel', title='工作表被保护了，忘了密码改不了',
+         why='设置了工作表保护（不是文件打开密码）',
+         how=['审阅 → 撤销工作表保护，试试空密码',
+              '实在忘了：另存为 .xlsx → 改扩展名为 .zip → 删掉 xl/worksheets/sheet1.xml 里的 sheetProtection 节点 → 改回 .xlsx',
+              '以后：保护时把密码记在文件属性的备注里'],
+         note='只适用于“工作表保护”；文件打开密码是加密，解不开'),
+    dict(app='excel', title='几万行数据卡到不能动',
+         why='整列引用、大量易失函数（TODAY/OFFSET/INDIRECT）、条件格式过多',
+         how=['把整列引用 A:A 改成具体范围 $A$2:$A$50000',
+              '公式贴成数值：复制 → 选择性粘贴 → 值',
+              '关掉自动计算：公式 → 计算选项 → 手动，需要时按 F9',
+              '数据 → 筛选/排序前先另存一份，避免误操作'],
+         note='超过 10 万行考虑用“数据模型/透视表”或直接上数据库'),
+
+    # ---------------- PPT ----------------
+    dict(app='ppt', title='换台电脑字体就变了，文字溢出框外',
+         why='演示电脑没装你用的字体，系统用替代字体渲染',
+         how=['只用系统自带字体：微软雅黑 / 宋体 / 黑体',
+              '必须用特殊字体：文件 → 选项 → 保存 → 勾「将字体嵌入文件」',
+              '最稳：另存为 PDF 或图片交付',
+              '文字溢出：开始 → 段落 → 行距/字号调小，或开启「溢出时缩排文字」'],
+         note='投影仪那台电脑的字体永远和你的不一样，别赌'),
+    dict(app='ppt', title='插进去的图片变模糊了',
+         why='PPT 默认压缩图片（220 ppi 以下）',
+         how=['文件 → 选项 → 高级 → 图像大小和质量 → 勾「不压缩文件中的图像」',
+              '已模糊的图片：右键 → 更改图片 → 重新插入原图',
+              '导出时选 PNG 而不是 JPG'],
+         note='截图直接粘贴最容易被压，先存成 PNG 再插入'),
+    dict(app='ppt', title='母版/版式改不动，新建页还是老样子',
+         why='改的是普通页而不是母版，或者用了“重用幻灯片”带进来的独立格式',
+         how=['视图 → 幻灯片母版 → 在母版里改（改完点「关闭母版视图」）',
+              '某页不跟随母版：开始 → 重设（重置）该页',
+              '版式混乱：右键该页 → 版式 → 重新选一个'],
+         note='母版里改一次，全部页面生效；普通页改一百次也只影响一页'),
+    dict(app='ppt', title='字号自己变小、文字被缩成一团',
+         why='文本框开启了「溢出时缩排文字」',
+         how=['选中文本框 → 右键「设置形状格式」→ 文本选项 → 文本框',
+              '取消「溢出时缩排文字」',
+              '或者直接把文本框拉大 / 减少字数'],
+         note='这条和上一条的“文字溢出”是同一个开关的两面'),
+    dict(app='ppt', title='4:3 的稿子放到 16:9 屏幕上两边黑边或被拉扁',
+         why='页面尺寸和投影比例不一致',
+         how=['设计 → 幻灯片大小 → 宽屏(16:9) 或 自定义',
+              '切换时会问「最大化/确保适合」，选「确保适合」内容不会被裁',
+              '已经变形的：逐页检查图片比例，Ctrl+Z 回不来就只能重排'],
+         note='做之前先问一句：会场屏幕是 16:9 还是 4:3'),
+    dict(app='ppt', title='动画顺序乱了，点一下全出来',
+         why='动画窗格里顺序错，或用了“与上一动画同时”',
+         how=['动画 → 动画窗格 → 拖动条目调整顺序',
+              '逐条出现：每条设「单击时」',
+              '想全部去掉：动画 → 无'],
+         note='汇报类 PPT 少用动画，翻页干净利落反而稳'),
+    dict(app='ppt', title='导出 PDF / 视频后颜色和字体都变了',
+         why='导出时没嵌入字体、视频压缩率默认偏低',
+         how=['PDF：文件 → 导出 → 创建 PDF，选项里勾「符合 ISO 19005-1 (PDF/A)」更稳',
+              '视频：文件 → 导出 → 创建视频 → 选「全高清 1080p」并调高每秒钟帧数',
+              '颜色偏差大：把图片统一转 sRGB'],
+         note='给打印店的 PPT 一定导 PDF，别给 pptx'),
+    dict(app='ppt', title='里面嵌的 Excel 图表不跟着数据更新',
+         why='图表是“图片”粘贴进来的，或者链接断了',
+         how=['粘贴时选「保留源格式并链接数据」',
+              '已断链：右键图表 → 编辑数据 → 重新指向源文件',
+              '要长期稳定：直接把表格做在 PPT 里（插入 → 图表），不走链接'],
+         note='链接的图表换台电脑就断，重要汇报建议“就地重做”'),
+]
+
+OFFICE_APPS = [('word', 'Word'), ('excel', 'Excel'), ('ppt', 'PPT')]
+
+
+def _wrap_cn(s, width):
+    out, line, w = [], '', 0
+    for ch in s:
+        cw = 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+        if w + cw > width:
+            out.append(line)
+            line, w = '', 0
+        line += ch
+        w += cw
+    if line:
+        out.append(line)
+    return out or ['']
+
+
+def _office_app_name(key):
+    for k, name in OFFICE_APPS:
+        if k == key:
+            return name
+    return key
+
+
+def office_menu():
+    print()
+    rows = ['',
+            '  ' + paint('⑤ 办公软件疑难杂症', '1;36')
+            + paint('   —   选一条，直接给解法', '90'),
+            '']
+    for i, (key, name) in enumerate(OFFICE_APPS, 1):
+        n = len([t for t in OFFICE_TIPS if t['app'] == key])
+        rows.append('   ' + paint('[%d]' % i, '1;33') + '   %-6s' % name
+                    + paint('%d 条' % n, '90'))
+    rows += ['', '   ' + paint('0', '1;33') + ' 回主界面    '
+             + paint('q', '1;33') + ' 退出', '']
+    print(_box(rows))
+    print('  ' + paint('请选择 1 / 2 / 3', '1') + paint('（0 返回）', '90')
+          + paint(' : ', '1'), end='')
+
+
+def office_list(app):
+    items = [t for t in OFFICE_TIPS if t['app'] == app]
+    print()
+    rows = ['',
+            '  ' + paint(_office_app_name(app), '1;36')
+            + paint('  共 %d 条' % len(items), '90'),
+            '']
+    for i, t in enumerate(items, 1):
+        for j, part in enumerate(_wrap_cn(t['title'], BOX_W - 12)):
+            prefix = ('   ' + paint('[%2d]' % i, '1;33') + ' ') if j == 0 else '        '
+            rows.append(prefix + part)
+    rows += ['', '   ' + paint('0', '1;33') + ' 返回分类    '
+             + paint('q', '1;33') + ' 退出', '']
+    print(_box(rows))
+    print('  ' + paint('输入编号看解法', '1') + paint('（0 返回）', '90')
+          + paint(' : ', '1'), end='')
+
+
+def office_tip(app, num):
+    items = [t for t in OFFICE_TIPS if t['app'] == app]
+    try:
+        idx = int(num)
+    except ValueError:
+        idx = 0
+    if idx < 1 or idx > len(items):
+        print()
+        print('  ' + paint('没有第 %s 条，输入 1-%d 之间的编号' % (num, len(items)), '1;31'))
+        return
+    t = items[idx - 1]
+    width = BOX_W - 4
+    rows = ['',
+            '  ' + paint('%s 第 %d 条' % (_office_app_name(app), idx), '1;36'),
+            '']
+    for part in _wrap_cn('现象：' + t['title'], width):
+        rows.append('  ' + part)
+    rows.append('')
+    for part in _wrap_cn('原因：' + t['why'], width):
+        rows.append('  ' + paint(part, '90'))
+    rows.append('')
+    rows.append('  ' + paint('解决：', '1;33'))
+    for i, step in enumerate(t['how'], 1):
+        first = True
+        for part in _wrap_cn(step, width - 4):
+            rows.append(('   %d. ' % i if first else '      ') + part)
+            first = False
+    if t.get('note'):
+        rows.append('')
+        for part in _wrap_cn('提示：' + t['note'], width):
+            rows.append('  ' + paint(part, '32'))
+    rows += ['', '   ' + paint('0', '1;33') + ' 返回列表    '
+             + paint('q', '1;33') + ' 退出', '']
+    print(_box(rows))
+    print('  ' + paint('回车继续看列表', '90') + paint(' : ', '1'), end='')
 
 STATE_FILE = os.path.join(tempfile.gettempdir(), 'pdfsplit_nametpl.txt')
 
@@ -1553,6 +2337,87 @@ def main(argv):
     if any(a in ('--home',) for a in argv):
         print_home()
         return 0
+    if '--rename-menu' in argv:
+        rename_menu()
+        return 0
+    if '--rename-template-menu' in argv:
+        rename_template_menu()
+        return 0
+    if '--rename-prefix-prompt' in argv:
+        rename_prefix_prompt()
+        return 0
+    if '--rename-tpl-prompt' in argv:
+        rename_tpl_prompt()
+        return 0
+    if '--rename-undo' in argv:
+        rename_undo()
+        return 0
+    if '--rename-scan' in argv:
+        targets = [a for a in argv if not a.startswith('--') and os.path.exists(a)]
+        if not targets:
+            print('  ' + paint('没有收到路径。把文件夹或文件拖进窗口再回车。', '1;31'))
+            return 1
+        try:
+            st = rename_scan(targets, recurse='--recurse' in argv)
+        except Exception as exc:
+            print('  ' + paint('扫描失败：%s' % exc, '1;31'))
+            if os.environ.get('PDFSPLIT_DEBUG'):
+                import traceback
+                traceback.print_exc()
+            return 1
+        if st:
+            rename_show(st)
+        return 0
+    if any(a in ('--rename-show', '--rename-apply', '--rename-mode', '--rename-order',
+                 '--rename-prefix-from', '--rename-tpl-from') for a in argv):
+        st = _rename_load()
+        if not st or not st.get('items'):
+            print('  ' + paint('还没有扫描。先把文件夹或文件拖进来。', '1;31'))
+            return 1
+        changed = False
+        for i, a in enumerate(argv):
+            if a == '--rename-mode' and i + 1 < len(argv):
+                st['mode'] = argv[i + 1].upper()
+                changed = True
+            elif a in ('--rename-prefix-from', '--rename-tpl-from') and i + 1 < len(argv):
+                lines = [ln.strip() for ln in _read_text(argv[i + 1]).splitlines()]
+                val = lines[0] if lines else ''
+                if a == '--rename-prefix-from':
+                    st['prefix'] = val
+                    if st['mode'] not in ('A', 'B', 'C'):
+                        st['mode'] = 'A'
+                else:
+                    st['tpl'] = val
+                    st['mode'] = 'C'
+                changed = True
+            elif a == '--rename-order' and i + 1 < len(argv):
+                nums = [int(x) for x in re.findall(r'\d+', argv[i + 1])]
+                n = len(st['items'])
+                if len(nums) != n:
+                    print('  ' + paint('顺序要给全：%d 个文件就要 %d 个编号' % (n, n), '1;31'))
+                    return 1
+                if sorted(nums) != list(range(1, n + 1)):
+                    print('  ' + paint('编号要正好是 1 到 %d，不能重复或越界' % n, '1;31'))
+                    return 1
+                st['order'] = [x - 1 for x in nums]
+                changed = True
+        if changed:
+            _rename_save(st)
+        if '--rename-apply' in argv:
+            rename_apply(st)
+            return 0
+        rename_show(st)
+        return 0
+    if any(a in ('--office-menu',) for a in argv):
+        office_menu()
+        return 0
+    for i, a in enumerate(argv):
+        if a == '--office-list' and i + 1 < len(argv):
+            office_list(argv[i + 1])
+            return 0
+        if a == '--office-tip' and i + 2 < len(argv):
+            office_tip(argv[i + 1], argv[i + 2])
+            return 0
     if any(a in ('--after',) for a in argv):
         print_after_task()
         return 0
