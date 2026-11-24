@@ -1,10 +1,10 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul 2>nul
-title PDF page splitter v2.1 - by XiaoNanSanSui @xiaonansansui
+title PDF page splitter v2.2 - by XiaoNanSanSui @xiaonansansui
 
 rem ===========================================================================
-rem  PDF page splitter  v2.1
+rem  PDF page splitter  v2.2
 rem  Author        : XiaoNanSanSui
 rem  GitHub        : https://github.com/xiaonansansui
 rem  ------------------------------------------------------------------------
@@ -130,6 +130,7 @@ if /i "%LINE%"=="q" goto :cleanup
 if /i "%LINE%"=="quit" goto :cleanup
 if /i "%LINE%"=="exit" goto :cleanup
 if "%LINE%"=="." goto :run_here
+if /i "%LINE%"=="n" goto :namewiz
 
 rem  The dropped path goes through a manifest file, so & ^ ( ) and spaces in
 rem  a path can not break the command line. A line that only carries options
@@ -149,10 +150,41 @@ set "CWD_DONE=1"
 set "RC=%ERRORLEVEL%"
 goto :ask
 
+rem  name wizard: the chinese text is printed by the embedded python, cmd only
+rem  reads the choice, so this file can stay pure ascii.
+:namewiz
+%PY% "%TMPPY%" --name-menu
+set "CH="
+set /p "CH="
+if "%CH%"=="1" goto :nz_default
+if "%CH%"=="2" goto :nz_pdfname
+if "%CH%"=="3" goto :nz_custom
+if "%CH%"=="0" goto :ask
+if not defined CH goto :ask
+echo [i] please type 1, 2, 3 or 0
+goto :namewiz
+
+:nz_default
+%PY% "%TMPPY%" --set-name ""
+goto :ask
+
+:nz_pdfname
+%PY% "%TMPPY%" --set-name "{pdf}-{n}"
+goto :ask
+
+:nz_custom
+%PY% "%TMPPY%" --name-prompt
+set "NM="
+set /p "NM="
+if not defined NM goto :ask
+>"%TMPLIST%" echo(%NM%
+%PY% "%TMPPY%" --set-name-from "%TMPLIST%"
+goto :ask
+
 rem ---- tail -----------------------------------------------------------------
 :usage
 echo.
-echo   PDF page splitter v2.1   -   XiaoNanSanSui (xiaonansansui)
+echo   PDF page splitter v2.2   -   XiaoNanSanSui (xiaonansansui)
 echo   GitHub: https://github.com/xiaonansansui
 echo.
 echo   usage:
@@ -210,7 +242,7 @@ endlocal & exit /b %RC%
 
 作者   : 小楠三岁
 GitHub : https://github.com/xiaonansansui
-版本   : 2.1
+版本   : 2.2
 
 用法:
     python 拆分PDF图片.py [PDF或文件夹 ...] [-o 输出目录] [--name 模板]
@@ -241,7 +273,7 @@ except ImportError:
 TITLE = '拆分PDF图片'
 __author__ = '小楠三岁'
 __github__ = 'https://github.com/xiaonansansui'
-__version__ = '2.1'
+__version__ = '2.2'
 
 OUT_ROOT_NAME = '拆分图片'
 A4_SHORT, A4_LONG = 595.28, 841.89   # A4 短边/长边（pt）
@@ -249,20 +281,29 @@ MARGIN = 14.0
 
 MENU_TEXT = '''
   ================================================================
-   拆分PDF图片 v2.1    ·    作者: 小楠三岁    ·    @xiaonansansui
+   拆分PDF图片 v2.2    ·    作者: 小楠三岁    ·    @xiaonansansui
   ================================================================
    把 PDF 文件（或文件夹）直接拖进这个窗口，然后回车
    可以一次拖多个；直接回车 = 处理本程序所在目录
    处理完会问要不要打开保存目录（回车 = 不打开）
    输入 q 回车 = 退出     （窗口不会自己关，拖文件也不会关）
   ----------------------------------------------------------------
-   想自定义输出文件名：单独输入一行
-       --name 会议纪要-{n}
-   之后拖进来的文件都会用这个模板；输入 --name 回车恢复默认。
-   占位符：{n} 序号   {nn} 两位补零   {page} 原页码
-           {pdf} 原文件名   {date} 今天日期
+   想把输出文件改成自己起的名字：输入 n 回车，按提示选就行
   ================================================================
 '''
+
+NAME_MENU = '''
+  ---------------------------------------------------------------
+   输出文件名想怎么起？（以后拖进来的文件都用这个）
+     1  默认              1组、2组、3组 ……
+     2  用 PDF 的名字      会议纪要-1、会议纪要-2 ……   （推荐）
+     3  自己起一个名字    比如输入“周例会”→“周例会-1”“周例会-2”
+     0  不改，直接返回
+  ---------------------------------------------------------------
+   请输入 1 / 2 / 3（0 返回）: '''
+
+NAME_PROMPT = '''
+   请输入名字（例如 周例会），直接回车 = 取消: '''
 
 NAME_HELP = '''
 输出文件名模板（--name）可用的占位符：
@@ -587,6 +628,27 @@ def defaults_name(idx):
     return '%d组' % idx
 
 
+def normalize_tpl(val):
+    """用户只写“周例会”这种名字时，自动补成“周例会-{n}”。"""
+    v = (val or '').strip().strip('"').strip()
+    if not v:
+        return ''
+    if '{' not in v:
+        v = v + '-{n}'
+    return v
+
+
+def describe_template(tpl):
+    """把模板翻成人话，给菜单显示用。"""
+    if not tpl:
+        return '1组、2组、3组 ……（默认）'
+    if tpl == '{pdf}-{n}':
+        return '原PDF名+序号，如 会议纪要-1、会议纪要-2 ……'
+    a = expand_template(tpl, 1, 1, 'PDF文件名示例.pdf')
+    b = expand_template(tpl, 2, 2, 'PDF文件名示例.pdf')
+    return '如 %s.jpg、%s.jpg ……' % (a, b)
+
+
 def unique_base(folder, base, used):
     """重名（模板里没有唯一占位符）时加 -2、-3 后缀。"""
     cand, n = base, 2
@@ -730,14 +792,40 @@ def expand_from_list(argv):
 
 def main(argv):
     argv = expand_from_list(argv)
+    if any(a in ('--name-menu',) for a in argv):
+        print(NAME_MENU, end='')
+        return 0
+    if any(a in ('--name-prompt',) for a in argv):
+        print(NAME_PROMPT, end='')
+        return 0
+    for i, a in enumerate(argv):
+        if a == '--set-name':
+            val = argv[i + 1] if i + 1 < len(argv) else ''
+            save_name_template(normalize_tpl(val))
+            print()
+            banner()
+            print('文件名已设置：%s' % describe_template(load_name_template()))
+            return 0
+        if a.startswith('--set-name='):
+            save_name_template(normalize_tpl(a.split('=', 1)[1]))
+            print()
+            banner()
+            print('文件名已设置：%s' % describe_template(load_name_template()))
+            return 0
+        if a in ('--set-name-from', '--name-from'):
+            fn = argv[i + 1] if i + 1 < len(argv) else ''
+            lines = [ln.strip() for ln in _read_text(fn).splitlines() if ln.strip()]
+            save_name_template(normalize_tpl(lines[0] if lines else ''))
+            print()
+            banner()
+            print('文件名已设置：%s' % describe_template(load_name_template()))
+            return 0
+
     if any(a in ('--menu',) for a in argv):
         print()
         print(MENU_TEXT)
-        saved = load_name_template()
-        if saved:
-            print('   当前文件名模板: %s' % saved)
-            print('   想恢复默认（1组、2组 ……）就单独输入一行  --name')
-            print()
+        print('   当前输出文件名：%s' % describe_template(load_name_template()))
+        print()
         return 0
     if any(a in ('--bye',) for a in argv):
         print(BYE_TEXT)
@@ -773,10 +861,10 @@ def main(argv):
             out_root = argv[i] if i < len(argv) else None
         elif a in ('--name', '-name'):
             i += 1
-            name_tpl = argv[i] if i < len(argv) else None
+            name_tpl = normalize_tpl(argv[i] if i < len(argv) else '')
             tpl_given = True
         elif a.startswith('--name='):
-            name_tpl = a.split('=', 1)[1]
+            name_tpl = normalize_tpl(a.split('=', 1)[1])
             tpl_given = True
         elif a in ('--jpg-only', '--pdf-only', '-nopause', '--quiet',
                    '--open', '--no-open',
@@ -795,10 +883,10 @@ def main(argv):
     if interactive and not args:
         if tpl_given:
             if name_tpl:
-                print('已保存文件名模板: %s' % name_tpl)
-                print('之后拖进来的 PDF 都用它；单独输入一行 --name 可恢复默认。')
+                print('文件名已设置：%s' % describe_template(name_tpl))
+                print('之后拖进来的 PDF 都用它；输入 n 回车可以再改。')
             else:
-                print('已恢复默认文件名：1组、2组、3组 ……')
+                print('文件名已恢复默认：1组、2组、3组 ……')
         else:
             print('没有收到 PDF 路径。把 PDF 文件（或文件夹）拖进窗口再回车。')
         print(END_HINT)
@@ -822,7 +910,7 @@ def main(argv):
 
     print('输出目录: %s' % out_root)
     if name_tpl:
-        print('文件名模板: %s' % name_tpl)
+        print('输出文件名: %s' % describe_template(name_tpl))
     total = 0
     fail = 0
     for pdf in pdfs:
