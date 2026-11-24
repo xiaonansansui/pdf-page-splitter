@@ -1,10 +1,10 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul 2>nul
-title PDF page splitter v2.2 - by XiaoNanSanSui @xiaonansansui
+title PDF page splitter v2.3 - by XiaoNanSanSui @xiaonansansui
 
 rem ===========================================================================
-rem  PDF page splitter  v2.2
+rem  PDF page splitter  v2.3
 rem  Author        : XiaoNanSanSui
 rem  GitHub        : https://github.com/xiaonansansui
 rem  ------------------------------------------------------------------------
@@ -110,7 +110,7 @@ if not defined EXTRACT_OK (
 if not defined EXTRACT_OK goto :no_unpack
 
 rem ---- 4. arguments came from dropping files onto the icon -------------------
-if "%~1"=="" goto :menu
+if "%~1"=="" goto :home
 
 :run_args
 %PY% "%TMPPY%" %*
@@ -118,10 +118,44 @@ set "RC=%ERRORLEVEL%"
 echo "%*" | findstr /i /c:"-nopause" >nul
 if not errorlevel 1 goto :cleanup
 
-rem ---- 5. interactive loop: the window never closes by itself ----------------
-:menu
-%PY% "%TMPPY%" --menu
+rem ---- 5. home menu: 1 = split, 2 = compress --------------------------------
+set "MODEOPT="
+:home
+%PY% "%TMPPY%" --home
+set "PICK="
+set /p "PICK="
+if "%PICK%"=="1" goto :mode_split
+if "%PICK%"=="2" goto :mode_compress
+if "%PICK%"=="0" goto :cleanup
+if not defined PICK goto :cleanup
+echo [i] please type 1, 2 or 0
+goto :home
 
+:mode_split
+set "MODEOPT="
+%PY% "%TMPPY%" --menu
+goto :ask
+
+:mode_compress
+%PY% "%TMPPY%" --compress-menu
+set "TARGET="
+set /p "TARGET="
+if "%TARGET%"=="0" goto :home
+if not defined TARGET goto :cz_auto
+echo.%TARGET%| findstr /r /c:"^[0-9][0-9.]*$" >nul
+if errorlevel 1 (
+    echo [i] please type a number in MB, for example 5
+    goto :mode_compress
+)
+goto :cz_go
+:cz_auto
+set "TARGET=auto"
+:cz_go
+set "MODEOPT=--compress --target %TARGET%"
+%PY% "%TMPPY%" --compress-ready "%TARGET%"
+goto :ask
+
+rem ---- 6. interactive loop: the window never closes by itself ----------------
 :ask
 set "LINE="
 set /p "LINE=PDF: "
@@ -129,24 +163,25 @@ if not defined LINE goto :ask_empty
 if /i "%LINE%"=="q" goto :cleanup
 if /i "%LINE%"=="quit" goto :cleanup
 if /i "%LINE%"=="exit" goto :cleanup
+if "%LINE%"=="0" goto :home
 if "%LINE%"=="." goto :run_here
-if /i "%LINE%"=="n" goto :namewiz
+if /i "%LINE%"=="n" if "%MODEOPT%"=="" goto :namewiz
 
 rem  The dropped path goes through a manifest file, so & ^ ( ) and spaces in
 rem  a path can not break the command line. A line that only carries options
 rem  (for example  --name meeting-{n}  ) is handled by the python side, which
 rem  remembers the template for the following drops.
 >"%TMPLIST%" echo(%LINE%
-%PY% "%TMPPY%" --interactive --from-list "%TMPLIST%"
+%PY% "%TMPPY%" --interactive %MODEOPT% --from-list "%TMPLIST%"
 set "RC=%ERRORLEVEL%"
 goto :ask
 
 :ask_empty
-if defined CWD_DONE goto :menu
+if defined CWD_DONE goto :home
 set "CWD_DONE=1"
 
 :run_here
-%PY% "%TMPPY%" --interactive "%~dp0."
+%PY% "%TMPPY%" --interactive %MODEOPT% "%~dp0."
 set "RC=%ERRORLEVEL%"
 goto :ask
 
@@ -184,13 +219,14 @@ goto :ask
 rem ---- tail -----------------------------------------------------------------
 :usage
 echo.
-echo   PDF page splitter v2.2   -   XiaoNanSanSui (xiaonansansui)
+echo   PDF page splitter v2.3   -   XiaoNanSanSui (xiaonansansui)
 echo   GitHub: https://github.com/xiaonansansui
 echo.
 echo   usage:
 echo     this.bat "file_or_folder" [-o outdir] [--name template]
 echo              [--open^|--no-open] [-nopause]
-echo     this.bat             (interactive: drop PDF files into the window)
+echo     this.bat --compress [--target MB] "file_or_folder"
+echo     this.bat             (interactive: 1 = split, 2 = compress)
 echo   output:
 echo     OUT_DIR\pdf name\1.jpg 1.pdf 2.jpg 2.pdf ...
 echo   name template placeholders:
@@ -242,7 +278,7 @@ endlocal & exit /b %RC%
 
 作者   : 小楠三岁
 GitHub : https://github.com/xiaonansansui
-版本   : 2.2
+版本   : 2.3
 
 用法:
     python 拆分PDF图片.py [PDF或文件夹 ...] [-o 输出目录] [--name 模板]
@@ -273,7 +309,7 @@ except ImportError:
 TITLE = '拆分PDF图片'
 __author__ = '小楠三岁'
 __github__ = 'https://github.com/xiaonansansui'
-__version__ = '2.2'
+__version__ = '2.3'
 
 OUT_ROOT_NAME = '拆分图片'
 A4_SHORT, A4_LONG = 595.28, 841.89   # A4 短边/长边（pt）
@@ -287,6 +323,7 @@ MENU_TEXT = '''
    可以一次拖多个；直接回车 = 处理本程序所在目录
    处理完会问要不要打开保存目录（回车 = 不打开）
    输入 q 回车 = 退出     （窗口不会自己关，拖文件也不会关）
+   输入 0 回车 = 回到上一层菜单
   ----------------------------------------------------------------
    想把输出文件改成自己起的名字：输入 n 回车，按提示选就行
   ================================================================
@@ -304,6 +341,33 @@ NAME_MENU = '''
 
 NAME_PROMPT = '''
    请输入名字（例如 周例会），直接回车 = 取消: '''
+
+HOME_TEXT = '''
+  ================================================================
+   拆分PDF图片 v2.3    ·    作者: 小楠三岁    ·    @xiaonansansui
+  ================================================================
+     1   拆分 PDF      每页的大图拆成 jpg，并生成同名 A4 PDF
+     2   压缩 PDF      把 PDF 压到你要的大小（比如 5 MB）
+     0   退出
+  ================================================================
+   请选择 1 / 2（输入 0 退出）: '''
+
+COMP_MENU = '''
+  ---------------------------------------------------------------
+   压缩体积：把 PDF 压到你要的大小（单位 MB，1 MB = 1024 KB）
+     · 直接回车    = 自动压缩（质量 75，长边 2480 像素，推荐）
+     · 输入数字    = 尽量压到这个大小，例如 5
+     · 输入 0 回车 = 返回上一层
+  ---------------------------------------------------------------
+   目标大小（MB）: '''
+
+COMP_READY = '''
+  ---------------------------------------------------------------
+   好的，目标大小：%s
+   把 PDF 文件（或文件夹）拖进这个窗口，然后回车
+   压出来的文件放在原 PDF 旁边，叫「原名_压缩.pdf」
+  ---------------------------------------------------------------
+'''
 
 NAME_HELP = '''
 输出文件名模板（--name）可用的占位符：
@@ -705,6 +769,186 @@ def process_pdf(pdf, out_root, want_jpg=True, want_pdf=True, name_tpl=None):
     return made, len(items) - len(kept), folder
 
 
+# ---------- 压缩 PDF 体积 ----------
+
+def _pdf_root_ref(data):
+    m = re.search(rb'trailer\s*<<(.*?)>>\s*startxref', data, re.S)
+    if not m:
+        return None
+    r = re.search(rb'/Root\s+(\d+)\s+(\d+)\s+R', m.group(1))
+    if not r:
+        return None
+    return int(r.group(1)), int(r.group(2))
+
+
+def _img_dict(w, h, cs, length):
+    return ('<< /Type /XObject /Subtype /Image /Width %d /Height %d '
+            '/ColorSpace /%s /BitsPerComponent 8 /Filter /DCTDecode '
+            '/Interpolate true /Length %d >>'
+            % (w, h, cs, length)).encode('ascii')
+
+
+def _open_image(raw):
+    try:
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+        return im
+    except Exception:
+        return None
+
+
+def _to_jpeg(im, quality, scale=1.0):
+    """重新编码成 JPEG，返回 (bytes, w, h, colorspace)。"""
+    out = im
+    if scale < 0.999:
+        out = im.resize((max(1, int(im.width * scale)),
+                         max(1, int(im.height * scale))), Image.LANCZOS)
+    if out.mode in ('RGBA', 'LA', 'P', 'PA', '1', 'I', 'F'):
+        out = out.convert('RGB')
+    elif out.mode not in ('RGB', 'L', 'CMYK'):
+        out = out.convert('RGB')
+    q = int(max(5, min(95, quality)))
+    buf = io.BytesIO()
+    out.save(buf, 'JPEG', quality=q, optimize=True,
+             subsampling=0 if q >= 90 else 2)
+    cs = {'L': 'DeviceGray', 'CMYK': 'DeviceCMYK'}.get(out.mode, 'DeviceRGB')
+    return buf.getvalue(), out.width, out.height, cs
+
+
+def compress_pdf(src, out_path, target_bytes=None, say=print):
+    """只替换里面的图片对象，页面、文字、书签全部原样保留。"""
+    with open(src, 'rb') as fh:
+        data = fh.read()
+    root = _pdf_root_ref(data)
+    if not root:
+        return None, 'PDF 结构较新（交叉引用流），暂不支持压缩'
+    if re.search(rb'(?<![0-9])\d+\s+[1-9]\d*\s+obj\b', data):
+        return None, 'PDF 里有非 0 版本的间接对象，暂不支持压缩'
+    objs = parse_objects(data)
+    if not objs:
+        return None, 'PDF 解析失败'
+    for num, db, raw in objs:
+        if b'/ObjStm' in db or b'/XRef' in db or b'/Encrypt' in db:
+            return None, 'PDF 用了对象流或加密，暂不支持压缩'
+
+    pics = {}
+    for num, db, raw in objs:
+        if b'/Image' not in db or raw is None:
+            continue
+        if b'/SMask' in db or b'/Mask' in db:      # 带透明蒙版的跳过，免得花掉
+            continue
+        im = _open_image(raw)
+        if im is not None:
+            pics[num] = (im, len(raw))
+    if not pics:
+        return None, '里面没有可压缩的图片（多半是纯文字版 PDF）'
+
+    keep = 0
+    for num, db, raw in objs:
+        if num not in pics:
+            keep += len(db) + (len(raw) if raw else 0)
+    base = keep + 800 * len(objs)
+
+    def attempt(quality, scale):
+        total, blobs = base, {}
+        for num, (im, _old) in pics.items():
+            jpeg, w, h, cs = _to_jpeg(im, quality, scale)
+            blobs[num] = (jpeg, w, h, cs)
+            total += len(jpeg) + 300
+        return total, blobs
+
+    if target_bytes:
+        lo, hi, pick = 12, 92, None
+        while lo <= hi:
+            q = (lo + hi) // 2
+            total, blobs = attempt(q, 1.0)
+            say('   试压 质量%d → 约 %.2f MB' % (q, total / 1048576.0))
+            if total <= target_bytes:
+                pick = (q, 1.0, blobs)
+                lo = q + 1
+            else:
+                hi = q - 1
+        if pick is None:                            # 只降质量不够，再缩分辨率
+            for sc in (0.85, 0.7, 0.55, 0.45, 0.35):
+                for q in (70, 55, 40, 25):
+                    total, blobs = attempt(q, sc)
+                    say('   试压 质量%d 缩放%d%% → 约 %.2f MB'
+                        % (q, sc * 100, total / 1048576.0))
+                    if total <= target_bytes:
+                        pick = (q, sc, blobs)
+                        break
+                if pick:
+                    break
+        if pick is None:
+            q, sc = 25, 0.35
+            total, blobs = attempt(q, sc)
+            pick = (q, sc, blobs)
+            say('   [i] 已经压到最小了，还是约 %.2f MB，先按这个给你'
+                % (total / 1048576.0))
+        quality, scale, blobs = pick
+    else:
+        quality = 75
+        big = max(max(im.width, im.height) for im, _ in pics.values())
+        scale = min(1.0, 2480.0 / big) if big > 2480 else 1.0
+        total, blobs = attempt(quality, scale)
+        say('   自动参数：质量 75，长边上限 2480 像素 → 约 %.2f MB'
+            % (total / 1048576.0))
+
+    buf = io.BytesIO()
+    buf.write(b'%PDF-1.7\n%\xe2\xe3\xcf\xd3\n')
+    offs, maxnum = {}, 0
+    for num, db, raw in objs:
+        maxnum = max(maxnum, num)
+        offs[num] = buf.tell()
+        buf.write(b'%d 0 obj\n' % num)
+        if num in blobs:
+            jpeg, w, h, cs = blobs[num]
+            buf.write(_img_dict(w, h, cs, len(jpeg)))
+            buf.write(b'\nstream\n' + jpeg + b'\nendstream\n')
+        else:
+            body = db.strip()
+            buf.write(body)
+            if raw is not None:
+                lm = re.search(rb'/Length\s+(\d+)', body)
+                cut = int(lm.group(1)) if lm else len(raw)
+                buf.write(b'\nstream\n' + raw[:cut] + b'\nendstream\n')
+            else:
+                buf.write(b'\n')
+        buf.write(b'endobj\n')
+    xref = buf.tell()
+    size = maxnum + 1
+    buf.write(b'xref\n0 %d\n' % size)
+    buf.write(b'0000000000 65535 f \n')
+    for i in range(1, size):
+        if i in offs:
+            buf.write(b'%010d 00000 n \n' % offs[i])
+        else:
+            buf.write(b'0000000000 65535 f \n')
+    buf.write(b'trailer\n<< /Size %d /Root %d %d R >>\nstartxref\n%d\n%%%%EOF\n'
+              % (size, root[0], root[1], xref))
+    with open(out_path, 'wb') as fh:
+        fh.write(buf.getvalue())
+    return os.path.getsize(out_path), 'ok'
+
+
+def compress_file(pdf, target_bytes=None, say=print):
+    stem = os.path.splitext(pdf)[0]
+    out = stem + '_压缩.pdf'
+    n = 2
+    while os.path.exists(out):
+        out = '%s_压缩%d.pdf' % (stem, n)
+        n += 1
+    old = os.path.getsize(pdf)
+    say('   原大小：%.2f MB' % (old / 1048576.0))
+    size, info = compress_pdf(pdf, out, target_bytes, say)
+    if size is None:
+        return None, info
+    say('   压缩后：%.2f MB  →  %s' % (size / 1048576.0, os.path.basename(out)))
+    if size >= old:
+        say('   [i] 这份本来就很小，压不动；新的反而略大，建议用原文件')
+    return size, out
+
+
 def collect_pdfs(args, exclude=()):
     """收集 PDF；跳过输出目录，避免把自己的产物又当成输入。"""
     excl = [os.path.abspath(e) for e in exclude if e]
@@ -792,6 +1036,19 @@ def expand_from_list(argv):
 
 def main(argv):
     argv = expand_from_list(argv)
+    if any(a in ('--home',) for a in argv):
+        print()
+        print(HOME_TEXT, end='')
+        return 0
+    if any(a in ('--compress-menu',) for a in argv):
+        print(COMP_MENU, end='')
+        return 0
+    for i, a in enumerate(argv):
+        if a in ('--compress-ready',) and i + 1 < len(argv):
+            who = argv[i + 1]
+            print(COMP_READY % ('自动（质量 75）' if who.lower() == 'auto'
+                                else '%s MB' % who))
+            return 0
     if any(a in ('--name-menu',) for a in argv):
         print(NAME_MENU, end='')
         return 0
@@ -852,6 +1109,8 @@ def main(argv):
     name_tpl = None
     tpl_given = False
     out_root = None
+    compress = '--compress' in argv
+    target_mb = None
     args = []
     i = 0
     while i < len(argv):
@@ -859,6 +1118,21 @@ def main(argv):
         if a in ('-o', '--out'):
             i += 1
             out_root = argv[i] if i < len(argv) else None
+        elif a in ('--target', '-t'):
+            i += 1
+            raw = argv[i] if i < len(argv) else ''
+            if raw and raw.lower() != 'auto':
+                try:
+                    target_mb = float(raw)
+                except ValueError:
+                    target_mb = None
+        elif a.startswith('--target='):
+            raw = a.split('=', 1)[1]
+            if raw and raw.lower() != 'auto':
+                try:
+                    target_mb = float(raw)
+                except ValueError:
+                    target_mb = None
         elif a in ('--name', '-name'):
             i += 1
             name_tpl = normalize_tpl(argv[i] if i < len(argv) else '')
@@ -867,7 +1141,7 @@ def main(argv):
             name_tpl = normalize_tpl(a.split('=', 1)[1])
             tpl_given = True
         elif a in ('--jpg-only', '--pdf-only', '-nopause', '--quiet',
-                   '--open', '--no-open',
+                   '--open', '--no-open', '--compress',
                    '--interactive', '--from-list', '--list'):
             pass
         else:
@@ -908,6 +1182,9 @@ def main(argv):
     out_root = os.path.abspath(out_root)
     pdfs = [p for p in pdfs if not os.path.abspath(p).startswith(out_root + os.sep)]
 
+    if compress:
+        return run_compress(pdfs, target_mb, open_mode, interactive)
+
     print('输出目录: %s' % out_root)
     if name_tpl:
         print('输出文件名: %s' % describe_template(name_tpl))
@@ -933,6 +1210,38 @@ def main(argv):
     print('%s v%s  ·  作者 %s  ·  GitHub %s'
           % (TITLE, __version__, __author__, __github__))
     ask_open_folder(out_root, open_mode)
+    if interactive:
+        print(END_HINT)
+    return 0 if fail == 0 else 3
+
+
+def run_compress(pdfs, target_mb, open_mode='no', interactive=False):
+    limit = int(round(target_mb * 1048576)) if target_mb else None
+    print('目标大小: %s' % ('%.2f MB' % target_mb if target_mb else '自动'))
+    ok = 0
+    fail = 0
+    first_out = None
+    for pdf in pdfs:
+        print('\n[%s]' % os.path.basename(pdf))
+        try:
+            size, info = compress_file(pdf, limit)
+        except Exception as exc:
+            size, info = None, '压缩失败: %s' % exc
+            if os.environ.get('PDFSPLIT_DEBUG'):
+                import traceback
+                traceback.print_exc()
+        if size is None:
+            fail += 1
+            print('   跳过：%s' % info)
+        else:
+            ok += 1
+            if first_out is None:
+                first_out = os.path.dirname(info)
+    print('\n完成：压缩 %d 个，跳过 %d 个。' % (ok, fail))
+    print('%s v%s  ·  作者 %s  ·  GitHub %s'
+          % (TITLE, __version__, __author__, __github__))
+    if first_out and open_mode != 'no':
+        ask_open_folder(first_out, open_mode)
     if interactive:
         print(END_HINT)
     return 0 if fail == 0 else 3
