@@ -1,0 +1,18 @@
+# 输出目录（程序自己生成的）
+拆分图片/
+out/
+
+# 备份与临时文件
+*.bak
+*.tmp
+_*.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# 编辑器
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

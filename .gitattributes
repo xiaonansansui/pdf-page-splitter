@@ -1,0 +1,17 @@
+# 让 .bat 始终以 CRLF 检出，否则 cmd 解析会出问题
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.txt   text eol=crlf
+
+*.py    text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+LICENSE text eol=lf
+
+# 二进制
+*.jpg   binary
+*.png   binary
+*.pdf   binary
+*.zip   binary
