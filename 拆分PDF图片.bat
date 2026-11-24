@@ -1,10 +1,10 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul 2>nul
-title PDF page splitter v2.3 - by XiaoNanSanSui @xiaonansansui
+title PDF page splitter v2.4 - by XiaoNanSanSui @xiaonansansui
 
 rem ===========================================================================
-rem  PDF page splitter  v2.3
+rem  PDF page splitter  v2.4
 rem  Author        : XiaoNanSanSui
 rem  GitHub        : https://github.com/xiaonansansui
 rem  ------------------------------------------------------------------------
@@ -126,9 +126,10 @@ set "PICK="
 set /p "PICK="
 if "%PICK%"=="1" goto :mode_split
 if "%PICK%"=="2" goto :mode_compress
+if "%PICK%"=="3" goto :mode_watermark
 if "%PICK%"=="0" goto :cleanup
 if not defined PICK goto :cleanup
-echo [i] please type 1, 2 or 0
+echo [i] please type 1, 2, 3 or 0
 goto :home
 
 :mode_split
@@ -155,8 +156,31 @@ set "MODEOPT=--compress --target %TARGET%"
 %PY% "%TMPPY%" --compress-ready "%TARGET%"
 goto :ask
 
+:mode_watermark
+set "MODEOPT="
+%PY% "%TMPPY%" --wm-menu
+
+:ask_wm
+echo.
+set "LINE="
+set /p "LINE=PDF: "
+if not defined LINE goto :ask_wm
+if /i "%LINE%"=="q" goto :cleanup
+if "%LINE%"=="0" goto :home
+>"%TMPLIST%" echo(%LINE%
+%PY% "%TMPPY%" --scan-watermark --open-preview --from-list "%TMPLIST%"
+if errorlevel 1 goto :ask_wm
+%PY% "%TMPPY%" --wm-confirm
+set "YES="
+set /p "YES="
+if /i not "%YES%"=="y" goto :ask_wm
+%PY% "%TMPPY%" --remove-watermark --from-list "%TMPLIST%"
+echo.
+goto :ask_wm
+
 rem ---- 6. interactive loop: the window never closes by itself ----------------
 :ask
+echo.
 set "LINE="
 set /p "LINE=PDF: "
 if not defined LINE goto :ask_empty
@@ -219,7 +243,7 @@ goto :ask
 rem ---- tail -----------------------------------------------------------------
 :usage
 echo.
-echo   PDF page splitter v2.3   -   XiaoNanSanSui (xiaonansansui)
+echo   PDF page splitter v2.4   -   XiaoNanSanSui (xiaonansansui)
 echo   GitHub: https://github.com/xiaonansansui
 echo.
 echo   usage:
@@ -278,7 +302,7 @@ endlocal & exit /b %RC%
 
 作者   : 小楠三岁
 GitHub : https://github.com/xiaonansansui
-版本   : 2.3
+版本   : 2.5
 
 用法:
     python 拆分PDF图片.py [PDF或文件夹 ...] [-o 输出目录] [--name 模板]
@@ -296,6 +320,8 @@ import re
 import shlex
 import sys
 import tempfile
+import unicodedata
+import zlib
 import time
 from collections import Counter
 
@@ -309,7 +335,7 @@ except ImportError:
 TITLE = '拆分PDF图片'
 __author__ = '小楠三岁'
 __github__ = 'https://github.com/xiaonansansui'
-__version__ = '2.3'
+__version__ = '2.5'
 
 OUT_ROOT_NAME = '拆分图片'
 A4_SHORT, A4_LONG = 595.28, 841.89   # A4 短边/长边（pt）
@@ -344,13 +370,32 @@ NAME_PROMPT = '''
 
 HOME_TEXT = '''
   ================================================================
-   拆分PDF图片 v2.3    ·    作者: 小楠三岁    ·    @xiaonansansui
+   拆分PDF图片 v2.4    ·    作者: 小楠三岁    ·    @xiaonansansui
   ================================================================
      1   拆分 PDF      每页的大图拆成 jpg，并生成同名 A4 PDF
      2   压缩 PDF      把 PDF 压到你要的大小（比如 5 MB）
+     3   去水印        删掉每页重复的图片水印（如扫描全能王 logo），正文不动
      0   退出
   ================================================================
-   请选择 1 / 2（输入 0 退出）: '''
+   请选择 1 / 2 / 3（输入 0 退出）: '''
+
+WM_MENU = '''
+  ---------------------------------------------------------------
+   去水印：先把 PDF 拖进来，程序会扫一遍，找出“每页都贴的同一张图”
+   （扫描全能王、某某扫描 App 的 logo 就是这种）
+   预览图：左边是页面、红框标出位置，右边是水印本身
+   确认后直接在 PDF 结构里删掉它，正文图片和文字一个像素都不动
+   输出：原名_去水印.pdf（原文件不动）
+  ---------------------------------------------------------------
+   把 PDF 拖进这个窗口，然后回车（输入 0 返回上一层）
+'''
+
+WM_CONFIRM = '''
+  ---------------------------------------------------------------
+   右边这张图就是它找到的水印，确定要去掉它吗？
+   （y = 去掉   n 或直接回车 = 不去）
+  ---------------------------------------------------------------
+   确认（y/n）: '''
 
 COMP_MENU = '''
   ---------------------------------------------------------------
@@ -397,6 +442,158 @@ END_HINT = ('  ---- 小楠三岁  ·  @xiaonansansui  ----  '
 def banner():
     print('%s v%s   ·   作者: %s   ·   GitHub: %s'
           % (TITLE, __version__, __author__, __github__))
+
+
+# ---------- 终端美化：框线 + 颜色 ----------
+
+def _enable_ansi():
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not k.GetConsoleMode(h, ctypes.byref(mode)):
+            return False
+        return bool(k.SetConsoleMode(h, mode.value | 0x0004))
+    except Exception:
+        return False
+
+
+ANSI = _enable_ansi()
+BOX_W = 62
+
+
+def paint(text, code):
+    if not ANSI or not code:
+        return text
+    return '\x1b[%sm%s\x1b[0m' % (code, text)
+
+
+def _dw(s):
+    """显示宽度：中日韩全角算 2 列，ANSI 转义不算宽度。"""
+    s = re.sub(r'\x1b\[[0-9;]*m', '', s)
+    w = 0
+    for ch in s:
+        if unicodedata.combining(ch):
+            continue
+        w += 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+    return w
+
+
+def _pad(s, width):
+    return s + ' ' * max(0, width - _dw(s))
+
+
+def _box(rows, width=BOX_W, edge='36'):
+    out = [paint('┌' + '─' * width + '┐', edge)]
+    for r in rows:
+        out.append(paint('│', edge) + ' ' + _pad(r, width - 2) + ' ' + paint('│', edge))
+    out.append(paint('└' + '─' * width + '┘', edge))
+    return '\n'.join(out)
+
+
+def _rule(width=BOX_W):
+    return '  ' + paint('─' * width, '90')
+
+
+def print_home():
+    print()
+    tpl = load_name_template()
+    rows = [
+        '',
+        '  ' + paint('拆分PDF图片', '1;36') + paint('  v%s' % __version__, '90')
+        + '          ' + paint('小楠三岁 · @xiaonansansui', '90'),
+        '  ' + paint('把 PDF 拆成图片 / 压小 / 去水印', '90'),
+        '',
+        '   ' + paint('[1]', '1;33') + '   拆分 PDF'
+        + '     每页大图 → N组.jpg + 同名 A4 PDF',
+        '   ' + paint('[2]', '1;33') + '   压缩 PDF'
+        + '     压到指定大小（比如 5 MB）',
+        '   ' + paint('[3]', '1;33') + '   去水印'
+        + '       删掉每页重复的图片水印（扫描软件加的）',
+        '',
+        '   ' + paint('当前文件名：', '90') + describe_template(tpl),
+        '',
+    ]
+    print(_box(rows))
+    print('  ' + paint('请输入 1 / 2 / 3', '1') + paint('（0 退出）', '90')
+          + paint(' : ', '1'), end='')
+
+
+def print_split_menu():
+    print()
+    rows = [
+        '',
+        '  ' + paint('① 拆分 PDF', '1;36') + paint('   —   每页大图拆成 jpg，并生成同名 A4 PDF', '90'),
+        '',
+        '   把 PDF 文件（或文件夹）拖进窗口，回车开始',
+        '   可以一次拖多个  ·  直接回车 = 处理本程序所在目录',
+        '   处理完会问要不要打开保存目录（回车 = 不打开）',
+        '',
+        '   ' + paint('n', '1;33') + ' 改输出文件名    '
+        + paint('0', '1;33') + ' 回主界面    ' + paint('q', '1;33') + ' 退出',
+        '',
+        '   当前文件名：' + describe_template(load_name_template()),
+        '',
+    ]
+    print(_box(rows))
+
+
+def print_comp_menu():
+    print()
+    rows = [
+        '',
+        '  ' + paint('② 压缩 PDF', '1;36') + paint('   —   把 PDF 压到你要的大小（单位 MB）', '90'),
+        '',
+        '   ' + paint('直接回车', '1;33') + '  = 自动压缩（质量 75，长边 2480 像素，推荐）',
+        '   ' + paint('输入数字', '1;33') + '  = 尽量压到这个大小，例如 5',
+        '   ' + paint('0', '1;33') + ' 回车     = 返回主界面',
+        '',
+    ]
+    print(_box(rows))
+    print('  ' + paint('目标大小（MB）: ', '1'), end='')
+
+
+def print_wm_menu():
+    print()
+    rows = [
+        '',
+        '  ' + paint('③ 去水印', '1;36') + paint('   —   删掉“每页都贴的同一张图”', '90'),
+        '',
+        '   扫描全能王、某某扫描 App 的 logo 就属于这种',
+        '   流程：先扫描 → 出预览图 → 你确认 → 才动手',
+        '   预览图左边是页面（红框标位置），右边是水印本身',
+        '   删的是 PDF 里的一条绘制指令，正文图片和文字一个像素都不动',
+        '   输出：原名_去水印.pdf（原文件不动）',
+        '',
+        '   ' + paint('0', '1;33') + ' 回主界面    ' + paint('q', '1;33') + ' 退出',
+        '',
+    ]
+    print(_box(rows))
+
+
+def print_wm_confirm():
+    print()
+    rows = [
+        '',
+        '  右边这张图就是它找到的水印，确定要去掉它吗？',
+        '  ' + paint('y', '1;33') + ' 去掉        '
+        + paint('n 或回车', '1;33') + ' 不去         '
+        + paint('0', '1;33') + ' 回主界面',
+        '',
+    ]
+    print(_box(rows))
+    print('  ' + paint('确认（y/n）: ', '1'), end='')
+
+
+def print_after_task():
+    """每次任务结束后的选项提示。"""
+    print()
+    print(_rule())
+    print('   ' + paint('回车', '1;33') + ' 继续处理下一个      '
+          + paint('0', '1;33') + ' 回主界面      '
+          + paint('q', '1;33') + ' 退出')
+    print(_rule())
 
 
 # ---------- 记住上一次用过的文件名模板 ----------
@@ -827,6 +1024,7 @@ def compress_pdf(src, out_path, target_bytes=None, say=print):
     objs = parse_objects(data)
     if not objs:
         return None, 'PDF 解析失败'
+    objmap = {o[0]: (o[1], o[2]) for o in objs}
     for num, db, raw in objs:
         if b'/ObjStm' in db or b'/XRef' in db or b'/Encrypt' in db:
             return None, 'PDF 用了对象流或加密，暂不支持压缩'
@@ -894,6 +1092,29 @@ def compress_pdf(src, out_path, target_bytes=None, say=print):
         say('   自动参数：质量 75，长边上限 2480 像素 → 约 %.2f MB'
             % (total / 1048576.0))
 
+    _rebuild_pdf(objs, root, blobs, out_path, objmap)
+    return os.path.getsize(out_path), 'ok'
+
+
+def _stream_len(body, raw, objmap=None):
+    """取 /Length 的真实值；它可能是间接引用（/Length 8 0 R），不能直接用对象号。"""
+    lm = re.search(rb'/Length\s+(\d+)(\s+\d+\s+R)?', body)
+    if not lm:
+        return len(raw)
+    n = int(lm.group(1))
+    if lm.group(2) and objmap is not None:
+        val = objmap.get(n, (b'', None))[0].strip()
+        try:
+            n = int(val)
+        except (TypeError, ValueError):
+            return len(raw)
+    if n < 0 or n > len(raw) + 64:
+        return len(raw)
+    return n
+
+
+def _rebuild_pdf(objs, root, blobs, out_path, objmap=None):
+    """按原对象顺序重写整个 PDF；blobs 里的对象用新图片替换，其余原样搬过去。"""
     buf = io.BytesIO()
     buf.write(b'%PDF-1.7\n%\xe2\xe3\xcf\xd3\n')
     offs, maxnum = {}, 0
@@ -909,8 +1130,7 @@ def compress_pdf(src, out_path, target_bytes=None, say=print):
             body = db.strip()
             buf.write(body)
             if raw is not None:
-                lm = re.search(rb'/Length\s+(\d+)', body)
-                cut = int(lm.group(1)) if lm else len(raw)
+                cut = _stream_len(body, raw, objmap)
                 buf.write(b'\nstream\n' + raw[:cut] + b'\nendstream\n')
             else:
                 buf.write(b'\n')
@@ -928,7 +1148,6 @@ def compress_pdf(src, out_path, target_bytes=None, say=print):
               % (size, root[0], root[1], xref))
     with open(out_path, 'wb') as fh:
         fh.write(buf.getvalue())
-    return os.path.getsize(out_path), 'ok'
 
 
 def compress_file(pdf, target_bytes=None, say=print):
@@ -947,6 +1166,301 @@ def compress_file(pdf, target_bytes=None, say=print):
     if size >= old:
         say('   [i] 这份本来就很小，压不动；新的反而略大，建议用原文件')
     return size, out
+
+
+# ---------- 水印探测 / 去除（对象级，无损） ----------
+
+def _page_xobjects(objmap, page_num):
+    """页面 Resources 里的 {名字: 对象号}。"""
+    resdb = _sub_dict(objmap, objmap[page_num][0], b'Resources')
+    xdb = _sub_dict(objmap, resdb, b'XObject')
+    mp = {}
+    for mm in re.finditer(rb'/([A-Za-z0-9#_.+-]+)\s+(\d+)\s+\d+\s+R', xdb):
+        mp[mm.group(1).decode('latin-1')] = int(mm.group(2))
+    return mp
+
+
+def _content_text(objmap, page_db):
+    """把一页的内容流拼起来（顺带解压），返回 (bytes, [(对象号, 是否压缩)])。"""
+    cm = re.search(rb'/Contents\s*(\[[^\]]*\]|\d+\s+\d+\s+R)', page_db)
+    if not cm:
+        return b'', []
+    txt, parts = b'', []
+    for r in re.findall(rb'(\d+)\s+\d+\s+R', cm.group(1)):
+        num = int(r)
+        db, raw = objmap.get(num, (b'', None))
+        if raw is None:
+            continue
+        packed = b'/FlateDecode' in db
+        txt += (inflate(raw) if packed else raw) + b'\n'
+        parts.append((num, packed))
+    return txt, parts
+
+
+def _do_position(content, name):
+    """从内容流里找出 /Name Do 之前的平移量，用来在预览图上画框。"""
+    pat = re.compile(rb'([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+cm\s*\n?\s*'
+                     rb'([-\d.]+)\s+([-\d.]+)\s+0\s+0\s+0\s+0\s+cm\s*\n?\s*/'
+                     + re.escape(name.encode('latin-1')) + rb'\s+Do')
+    m = pat.search(content)
+    if not m:
+        m2 = re.search(rb'([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+cm\s*\n?\s*/'
+                       + re.escape(name.encode('latin-1')) + rb'\s+Do', content)
+        if not m2:
+            return None
+        g = [float(x) for x in m2.groups()]
+        return g[4], g[5], g[0], g[3]
+    g = [float(x) for x in m.groups()]
+    w, h = g[6], g[7]
+    return g[4], g[5], w, h
+
+
+def find_watermarks(pdf, say=print):
+    """找出“每页都贴、尺寸又明显更小”的重复图片对象 = 水印候选。"""
+    with open(pdf, 'rb') as fh:
+        data = fh.read()
+    objs = parse_objects(data)
+    objmap = {o[0]: (o[1], o[2]) for o in objs}
+    pages = [o[0] for o in objs if re.search(rb'/Type\s*/Page(?![sA-Za-z])', o[1])]
+    if not pages:
+        return None, '读不出页面结构（可能是对象流 PDF）'
+    per_page, seen = {}, {}
+    for pn in pages:
+        mp = _page_xobjects(objmap, pn)
+        per_page[pn] = mp
+        for name, oid in mp.items():
+            seen.setdefault(oid, []).append((pn, name))
+    # 按内容 md5 分组：扫描软件常常每页放一份“内容相同、对象号不同”的水印
+    groups = {}
+    for oid, uses in seen.items():
+        idb, raw = objmap.get(oid, (b'', None))
+        if b'/Image' not in idb or raw is None:
+            continue
+        wm = re.search(rb'/Width\s+(\d+)', idb)
+        hm = re.search(rb'/Height\s+(\d+)', idb)
+        if not wm or not hm:
+            continue
+        h = hashlib.md5(raw).hexdigest()
+        g = groups.setdefault(h, dict(oids=[], uses=[], raw=raw,
+                                      w=int(wm.group(1)), h=int(hm.group(1))))
+        g['oids'].append(oid)
+        g['uses'].extend(uses)
+    cands = []
+    for h, g in groups.items():
+        pset = set(pn for pn, _n in g['uses'])
+        if len(pset) < max(2, int(len(pages) * 0.8)):
+            continue
+        cands.append(dict(oids=g['oids'], name=g['uses'][0][1], uses=g['uses'],
+                          w=g['w'], h=g['h'], area=g['w'] * g['h'], raw=g['raw'],
+                          pages=len(pset)))
+    if not cands:
+        return dict(pages=len(pages), cands=[], objmap=objmap, objs=objs,
+                    page_nums=pages, per_page=per_page), 'ok'
+    # 水印一定是“比正文那页小得多”的：用每页最大图做参照
+    page_area = 0
+    for pn in pages[:1]:
+        for name, oid in per_page[pn].items():
+            idb, raw = objmap.get(oid, (b'', None))
+            wm = re.search(rb'/Width\s+(\d+)', idb)
+            hm = re.search(rb'/Height\s+(\d+)', idb)
+            if wm and hm:
+                page_area = max(page_area, int(wm.group(1)) * int(hm.group(1)))
+    cands = [c for c in cands if page_area == 0 or c['area'] < page_area * 0.25]
+    cands.sort(key=lambda c: c['area'])
+    return dict(pages=len(pages), cands=cands, objmap=objmap, objs=objs,
+                page_nums=pages, per_page=per_page, page_area=page_area), 'ok'
+
+
+def _wm_report(pdf, info, open_preview=False, say=print):
+    if not info['cands']:
+        say('   共 %d 页，没发现“每页都贴的重复图片”' % info['pages'])
+        say('   （这份 PDF 的水印可能是烧进像素里的，不是独立对象）')
+        return None
+    say('   共 %d 页，发现 %d 个“每页都出现”的图片对象：'
+        % (info['pages'], len(info['cands'])))
+    stem = os.path.splitext(pdf)[0]
+    imgs = []
+    for c in info['cands']:
+        im = _open_image(c['raw'])
+        if im is None:
+            continue
+        imgs.append((c, im))
+        say('   · %dx%d 像素，贴在 %d 页上，位置在每页的 %s'
+            % (c['w'], c['h'], c['pages'], _wm_pos(info, c)))
+    if not imgs:
+        return None
+    # 水印样本 + 在页面上的位置
+    c0, im0 = imgs[0]
+    pw = 560
+    th = max(60, int(im0.height * pw / im0.width))
+    thumb = im0.convert('RGB').resize((pw, min(th, 220)), Image.LANCZOS)
+    page_im = _page_image(info, info['page_nums'][0])
+    pv = None
+    box = None
+    content, _parts = _content_text(info['objmap'], info['objmap'][info['page_nums'][0]][0])
+    box = _do_position(content, c0['name'])
+    if page_im is not None:
+        w = 560
+        h = max(1, int(page_im.height * w / page_im.width))
+        pv = page_im.convert('RGB').resize((w, h), Image.LANCZOS)
+        if box:
+            x, y, bw, bh = box
+            mb = re.search(rb'/MediaBox\s*\[\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\]',
+                           info['objmap'][info['page_nums'][0]][0])
+            if mb:
+                x0, y0, x1, y1 = [float(v) for v in mb.groups()]
+                sx = w / max(1e-6, (x1 - x0))
+                sy = h / max(1e-6, (y1 - y0))
+                rx = (x - x0) * sx
+                ry = (y1 - (y + bh)) * sy
+                pv = pv.copy()
+                cv = np.array(pv)
+                for t in range(4):
+                    yy = int(ry) + t
+                    if 0 <= yy < h:
+                        cv[yy, max(0, int(rx)):min(w, int(rx + bw * sx))] = [255, 0, 0]
+                    yy = int(ry + bh * sy) + t
+                    if 0 <= yy < h:
+                        cv[yy, max(0, int(rx)):min(w, int(rx + bw * sx))] = [255, 0, 0]
+                    xx = int(rx) + t
+                    if 0 <= xx < w:
+                        cv[max(0, int(ry)):min(h, int(ry + bh * sy)), xx] = [255, 0, 0]
+                    xx = int(rx + bw * sx) + t
+                    if 0 <= xx < w:
+                        cv[max(0, int(ry)):min(h, int(ry + bh * sy)), xx] = [255, 0, 0]
+                pv = Image.fromarray(cv)
+    out = stem + '_水印预览.png'
+    if pv is not None:
+        panel = Image.new('RGB', (1120 + 16, max(pv.height, thumb.height) + 40), 'white')
+        panel.paste(pv, (0, 20))
+        panel.paste(thumb, (576, 20 + 0))
+        panel.save(out)
+    else:
+        thumb.save(out)
+    say('   预览图：%s（左边是页面，红框标出水印位置；右边是水印本身）'
+        % os.path.basename(out))
+    if open_preview:
+        try:
+            os.startfile(out)
+        except Exception:
+            pass
+    return out
+
+
+def _page_image(info, page_num):
+    best = None
+    for name, oid in info['per_page'][page_num].items():
+        idb, raw = info['objmap'].get(oid, (b'', None))
+        if b'/Image' not in idb or raw is None:
+            continue
+        wm = re.search(rb'/Width\s+(\d+)', idb)
+        hm = re.search(rb'/Height\s+(\d+)', idb)
+        if not wm or not hm:
+            continue
+        a = int(wm.group(1)) * int(hm.group(1))
+        if best is None or a > best[0]:
+            best = (a, raw)
+    if best is None:
+        return None
+    return _open_image(best[1])
+
+
+def _wm_pos(info, cand):
+    content, _ = _content_text(info['objmap'], info['objmap'][info['page_nums'][0]][0])
+    box = _do_position(content, cand['name'])
+    if not box:
+        return '（位置读不到）'
+    mb = re.search(rb'/MediaBox\s*\[\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\]',
+                   info['objmap'][info['page_nums'][0]][0])
+    if not mb:
+        return '（位置读不到）'
+    x0, y0, x1, y1 = [float(v) for v in mb.groups()]
+    cx = (box[0] + box[2] / 2 - x0) / max(1e-6, x1 - x0)
+    cy = 1 - (box[1] + box[3] / 2 - y0) / max(1e-6, y1 - y0)
+    return _where(cx, cy)
+
+
+def _where(cx, cy):
+    v = '上' if cy < 0.34 else ('中' if cy < 0.67 else '下')
+    h = '左' if cx < 0.34 else ('中' if cx < 0.67 else '右')
+    return h + v
+
+
+def scan_watermark(pdf, open_preview=False, say=print):
+    """只扫描不动手：报告每页重复的图片对象，并生成预览。"""
+    info, msg = find_watermarks(pdf, say)
+    if info is None:
+        return None, msg
+    png = _wm_report(pdf, info, open_preview, say)
+    info['png'] = png
+    return info, 'ok'
+
+
+def strip_watermark(pdf, say=print):
+    info, msg = find_watermarks(pdf, say)
+    if info is None:
+        return None, msg
+    if not info['cands']:
+        return None, '没找到“每页重复的图片水印”，这份 PDF 的水印可能是烧进像素里的'
+    root = _pdf_root_ref(open(pdf, 'rb').read())
+    if not root:
+        return None, 'PDF 结构较新（交叉引用流），暂不支持改写'
+    objmap, objs = info['objmap'], info['objs']
+    kill = set()
+    names_by_page = {}
+    for c in info['cands']:
+        for _o in c['oids']:
+            kill.add(_o)
+        for pn, name in c['uses']:
+            names_by_page.setdefault(pn, set()).add(name)
+    new_objs = []
+    removed = 0
+    for num, db, raw in objs:
+        new_objs.append((num, db, raw))
+    # 1) 页面 Resources 里去掉这些 XObject
+    by_num = {o[0]: [o[1], o[2]] for o in new_objs}
+    for pn, names in names_by_page.items():
+        db = by_num[pn][0]
+        for name in names:
+            db = re.sub(rb'\s*/' + re.escape(name.encode('latin-1')) + rb'\s+\d+\s+\d+\s+R', b'', db, count=1)
+        by_num[pn][0] = db
+    # 2) 内容流里去掉 /Name Do
+    for pn, names in names_by_page.items():
+        content, parts = _content_text(objmap, objmap[pn][0])
+        if not content:
+            continue
+        newc = content
+        for name in names:
+            pat = re.compile(rb'[qQ]\s*\n?\s*([-\d.]+\s+){6}cm\s*\n?\s*([-\d.]+\s+){6}cm\s*\n?\s*/'
+                             + re.escape(name.encode('latin-1')) + rb'\s+Do\s*\n?\s*[qQ]\s*\n?')
+            newc2 = pat.sub(b'', newc)
+            if newc2 == newc:
+                newc2 = re.sub(rb'\s*/' + re.escape(name.encode('latin-1')) + rb'\s+Do\b', b'', newc)
+            newc = newc2
+        if newc == content:
+            continue
+        for num_i, packed in parts:
+            body = zlib.compress(newc) if packed else newc
+            by_num[num_i][0] = re.sub(rb'/Length\s+\d+(\s+\d+\s+R)?', b'/Length %d' % len(body), by_num[num_i][0], count=1)
+            by_num[num_i][1] = body
+        removed += 1
+    if removed == 0:
+        return None, '找到了水印对象，但没能在内容流里定位到它的绘制指令'
+    new_objs = [(n, by_num[n][0], by_num[n][1]) for n, _d, _r in new_objs]
+    stem = os.path.splitext(pdf)[0]
+    out = stem + '_去水印.pdf'
+    k = 2
+    while os.path.exists(out):
+        out = '%s_去水印%d.pdf' % (stem, k)
+        k += 1
+    _rebuild_pdf(new_objs, root, {}, out, by_num)
+    say('   已从 %d 页里删掉水印对象（正文、文字、其他图片全部原样保留）' % removed)
+    say('   输出：%s' % os.path.basename(out))
+    return os.path.getsize(out), out
+
+
+def remove_watermark(pdf, say=print):
+    return strip_watermark(pdf, say)
 
 
 def collect_pdfs(args, exclude=()):
@@ -1037,11 +1551,48 @@ def expand_from_list(argv):
 def main(argv):
     argv = expand_from_list(argv)
     if any(a in ('--home',) for a in argv):
-        print()
-        print(HOME_TEXT, end='')
+        print_home()
+        return 0
+    if any(a in ('--after',) for a in argv):
+        print_after_task()
+        return 0
+    if any(a in ('--wm-menu',) for a in argv):
+        print_wm_menu()
+        return 0
+    if any(a in ('--wm-confirm',) for a in argv):
+        print_wm_confirm()
+        return 0
+    if '--scan-watermark' in argv or '--remove-watermark' in argv:
+        targets = [a for a in argv if not a.startswith('--') and os.path.isfile(a)]
+        if not targets:
+            print('没有收到 PDF 文件。把 PDF 拖进窗口再回车。')
+            return 1
+        scanning = '--scan-watermark' in argv
+        for pdf in targets:
+            print('\n[%s]' % os.path.basename(pdf))
+            try:
+                if scanning:
+                    res, info = scan_watermark(pdf, open_preview='--open-preview' in argv)
+                    if res is None:
+                        print('   跳过：%s' % info)
+                        continue
+                    if not res.get('cands'):
+                        return 1
+                else:
+                    size, info = remove_watermark(pdf)
+                    if size is None:
+                        print('   跳过：%s' % info)
+                        return 1
+                    print('   完成：%.2f MB' % (size / 1048576.0))
+            except Exception as exc:
+                print('   失败：%s' % exc)
+                if os.environ.get('PDFSPLIT_DEBUG'):
+                    import traceback
+                    traceback.print_exc()
+                return 1
         return 0
     if any(a in ('--compress-menu',) for a in argv):
-        print(COMP_MENU, end='')
+        print_comp_menu()
         return 0
     for i, a in enumerate(argv):
         if a in ('--compress-ready',) and i + 1 < len(argv):
@@ -1079,10 +1630,7 @@ def main(argv):
             return 0
 
     if any(a in ('--menu',) for a in argv):
-        print()
-        print(MENU_TEXT)
-        print('   当前输出文件名：%s' % describe_template(load_name_template()))
-        print()
+        print_split_menu()
         return 0
     if any(a in ('--bye',) for a in argv):
         print(BYE_TEXT)
@@ -1163,7 +1711,7 @@ def main(argv):
                 print('文件名已恢复默认：1组、2组、3组 ……')
         else:
             print('没有收到 PDF 路径。把 PDF 文件（或文件夹）拖进窗口再回车。')
-        print(END_HINT)
+        print_after_task()
         return 0 if tpl_given else 1
 
     pdfs, roots = collect_pdfs(args, (out_root,))
@@ -1173,7 +1721,7 @@ def main(argv):
         print('没有找到 PDF 文件。')
         print('用法: 把 PDF（或文件夹）拖到这个 bat 上，或双击后把 PDF 拖进窗口。')
         if interactive:
-            print(END_HINT)
+            print_after_task()
         return 1
     if out_root is None:
         base = os.path.commonpath([os.path.abspath(r) for r in roots]) if len(roots) > 1 \
@@ -1211,7 +1759,7 @@ def main(argv):
           % (TITLE, __version__, __author__, __github__))
     ask_open_folder(out_root, open_mode)
     if interactive:
-        print(END_HINT)
+        print_after_task()
     return 0 if fail == 0 else 3
 
 
@@ -1243,7 +1791,7 @@ def run_compress(pdfs, target_mb, open_mode='no', interactive=False):
     if first_out and open_mode != 'no':
         ask_open_folder(first_out, open_mode)
     if interactive:
-        print(END_HINT)
+        print_after_task()
     return 0 if fail == 0 else 3
 
 
