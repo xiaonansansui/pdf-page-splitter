@@ -1,10 +1,10 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul 2>nul
-title PDF page splitter v2.0 - by XiaoNanSanSui @xiaonansansui
+title PDF page splitter v2.1 - by XiaoNanSanSui @xiaonansansui
 
 rem ===========================================================================
-rem  PDF page splitter  v2.0
+rem  PDF page splitter  v2.1
 rem  Author        : XiaoNanSanSui
 rem  GitHub        : https://github.com/xiaonansansui
 rem  ------------------------------------------------------------------------
@@ -19,7 +19,15 @@ rem  How to use
 rem    1) double click this file, then drag PDF files into the window and
 rem       press Enter (the window stays open, drop as many as you like)
 rem    2) or drop PDF files / folders directly onto this file icon
-rem    3) command line:  this.bat "file_or_folder" [-o outdir] [--open] [--jpg-only]
+rem    3) command line:  this.bat "file_or_folder" [-o outdir] [--name tpl]
+rem                      [--open] [--jpg-only]
+rem  Name template (--name)
+rem    {n} {nn} {page} {pdf} {date} are replaced per image, for example
+rem      --name "meeting-{n}"     gives   meeting-1.jpg  meeting-1.pdf
+rem      --name "{pdf}-p{page}"   gives   report-p1.jpg  report-p1.pdf
+rem    In the interactive window type  --name meeting-{n}  on its own line,
+rem    every file dropped afterwards uses that template;  --name  alone
+rem    restores the default 1, 2, 3 ...
 rem  Requirements
 rem    Python 3 (a bundled runtime is reused when one is found), plus
 rem    pillow and numpy - they are installed automatically on first run.
@@ -124,7 +132,9 @@ if /i "%LINE%"=="exit" goto :cleanup
 if "%LINE%"=="." goto :run_here
 
 rem  The dropped path goes through a manifest file, so & ^ ( ) and spaces in
-rem  a path can not break the command line.
+rem  a path can not break the command line. A line that only carries options
+rem  (for example  --name meeting-{n}  ) is handled by the python side, which
+rem  remembers the template for the following drops.
 >"%TMPLIST%" echo(%LINE%
 %PY% "%TMPPY%" --interactive --from-list "%TMPLIST%"
 set "RC=%ERRORLEVEL%"
@@ -142,14 +152,19 @@ goto :ask
 rem ---- tail -----------------------------------------------------------------
 :usage
 echo.
-echo   PDF page splitter v2.0   -   XiaoNanSanSui (xiaonansansui)
+echo   PDF page splitter v2.1   -   XiaoNanSanSui (xiaonansansui)
 echo   GitHub: https://github.com/xiaonansansui
 echo.
 echo   usage:
-echo     this.bat "file_or_folder" [-o outdir] [--open^|--no-open] [-nopause]
+echo     this.bat "file_or_folder" [-o outdir] [--name template]
+echo              [--open^|--no-open] [-nopause]
 echo     this.bat             (interactive: drop PDF files into the window)
 echo   output:
 echo     OUT_DIR\pdf name\1.jpg 1.pdf 2.jpg 2.pdf ...
+echo   name template placeholders:
+echo     {n} {nn} {page} {pdf} {date}
+echo     example: --name "meeting-{n}"  =^>  meeting-1.jpg  meeting-1.pdf
+echo     no placeholder at all -^> duplicates get a -2, -3 suffix
 endlocal & exit /b 0
 
 :no_python
@@ -195,12 +210,16 @@ endlocal & exit /b %RC%
 
 作者   : 小楠三岁
 GitHub : https://github.com/xiaonansansui
-版本   : 2.0
+版本   : 2.1
 
 用法:
-    python 拆分PDF图片.py [PDF或文件夹 ...] [-o 输出目录] [--jpg-only] [--pdf-only]
+    python 拆分PDF图片.py [PDF或文件夹 ...] [-o 输出目录] [--name 模板]
+                           [--jpg-only] [--pdf-only]
     python 拆分PDF图片.py --from-list 清单.txt
 不带参数时处理当前目录（含子目录）里的所有 PDF。
+
+输出文件名可以用 --name 自定义，例如 --name "会议纪要-{n}" 会得到
+会议纪要-1.jpg / 会议纪要-1.pdf …… 占位符见 --help。
 """
 import hashlib
 import io
@@ -208,6 +227,8 @@ import os
 import re
 import shlex
 import sys
+import tempfile
+import time
 from collections import Counter
 
 try:
@@ -220,7 +241,7 @@ except ImportError:
 TITLE = '拆分PDF图片'
 __author__ = '小楠三岁'
 __github__ = 'https://github.com/xiaonansansui'
-__version__ = '2.0'
+__version__ = '2.1'
 
 OUT_ROOT_NAME = '拆分图片'
 A4_SHORT, A4_LONG = 595.28, 841.89   # A4 短边/长边（pt）
@@ -228,13 +249,38 @@ MARGIN = 14.0
 
 MENU_TEXT = '''
   ================================================================
-   拆分PDF图片 v2.0    ·    作者: 小楠三岁    ·    @xiaonansansui
+   拆分PDF图片 v2.1    ·    作者: 小楠三岁    ·    @xiaonansansui
   ================================================================
    把 PDF 文件（或文件夹）直接拖进这个窗口，然后回车
    可以一次拖多个；直接回车 = 处理本程序所在目录
    处理完会问要不要打开保存目录（回车 = 不打开）
    输入 q 回车 = 退出     （窗口不会自己关，拖文件也不会关）
+  ----------------------------------------------------------------
+   想自定义输出文件名：单独输入一行
+       --name 会议纪要-{n}
+   之后拖进来的文件都会用这个模板；输入 --name 回车恢复默认。
+   占位符：{n} 序号   {nn} 两位补零   {page} 原页码
+           {pdf} 原文件名   {date} 今天日期
   ================================================================
+'''
+
+NAME_HELP = '''
+输出文件名模板（--name）可用的占位符：
+
+  {n}      图片序号，从 1 开始          -> 1, 2, 3 ...
+  {nn}     序号补零到两位                -> 01, 02, 03 ...
+  {page}   图片在原 PDF 里的页码          -> 1, 2, 3 ...
+  {pdf}    原 PDF 的文件名（不含扩展名）
+  {date}   今天的日期                    -> 20261124
+
+例子：
+  --name "{n}"               -> 1.jpg  1.pdf  2.jpg  2.pdf
+  --name "{n}组"             -> 1组.jpg  1组.pdf（默认）
+  --name "会议纪要-{n}"       -> 会议纪要-1.jpg  会议纪要-1.pdf
+  --name "{pdf}-第{page}页"   -> 构溪社区第一组会议纪要-第1页.jpg
+
+文件名里不能用的字符（\\ / : * ? " < > |）会自动换成下划线；
+模板里没有 {n}/{page} 这类唯一占位符时，重名的会自动加 -2、-3 后缀。
 '''
 
 BYE_TEXT = '  再见  ·  小楠三岁  ·  GitHub @xiaonansansui'
@@ -246,6 +292,30 @@ END_HINT = ('  ---- 小楠三岁  ·  @xiaonansansui  ----  '
 def banner():
     print('%s v%s   ·   作者: %s   ·   GitHub: %s'
           % (TITLE, __version__, __author__, __github__))
+
+
+# ---------- 记住上一次用过的文件名模板 ----------
+
+STATE_FILE = os.path.join(tempfile.gettempdir(), 'pdfsplit_nametpl.txt')
+
+
+def load_name_template():
+    try:
+        with open(STATE_FILE, 'r', encoding='utf-8') as fh:
+            return fh.read().strip()
+    except Exception:
+        return ''
+
+
+def save_name_template(tpl):
+    try:
+        if tpl:
+            with open(STATE_FILE, 'w', encoding='utf-8') as fh:
+                fh.write(tpl)
+        elif os.path.exists(STATE_FILE):
+            os.remove(STATE_FILE)
+    except Exception:
+        pass
 
 
 # ---------- 打开保存目录 ----------
@@ -492,7 +562,42 @@ def safe_stem(path):
     return re.sub(r'[\\/:*?"<>|]', '_', stem)
 
 
-def process_pdf(pdf, out_root, want_jpg=True, want_pdf=True):
+def expand_template(tpl, idx, page, pdf_path):
+    """把 --name 模板展开成文件名（不含扩展名），并清掉非法字符。"""
+    pdf_stem = safe_stem(pdf_path)
+    values = {
+        'n': str(idx),
+        'nn': '%02d' % idx,
+        'nnn': '%03d' % idx,
+        'page': str(page) if page else str(idx),
+        'pdf': pdf_stem,
+        'date': time.strftime('%Y%m%d'),
+    }
+
+    def repl(m):
+        key = m.group(1).lower()
+        return values.get(key, m.group(0))
+
+    out = re.sub(r'\{([A-Za-z_]+)\}', repl, tpl or '')
+    out = re.sub(r'[\\/:*?"<>|\r\n\t]', '_', out).strip(' .')
+    return out or defaults_name(idx)
+
+
+def defaults_name(idx):
+    return '%d组' % idx
+
+
+def unique_base(folder, base, used):
+    """重名（模板里没有唯一占位符）时加 -2、-3 后缀。"""
+    cand, n = base, 2
+    while cand.lower() in used:
+        cand = '%s-%d' % (base, n)
+        n += 1
+    used.add(cand.lower())
+    return cand
+
+
+def process_pdf(pdf, out_root, want_jpg=True, want_pdf=True, name_tpl=None):
     items = analyse_pdf(pdf)
     cnt = Counter(i['digest'] for i in items)
     kept = [i for i in items if cnt[i['digest']] < 2]     # 跳过每页重复的页眉模板图
@@ -501,15 +606,16 @@ def process_pdf(pdf, out_root, want_jpg=True, want_pdf=True):
     folder = os.path.join(out_root, name)
     n = 2
     while os.path.isdir(folder) and os.listdir(folder) and not any(
-            re.match(r'^\d+组\.(jpg|pdf)$', f) for f in os.listdir(folder)):
+            re.match(r'^.+\.(jpg|pdf)$', f, re.I) for f in os.listdir(folder)):
         folder = os.path.join(out_root, '%s_%d' % (name, n))
         n += 1
     os.makedirs(folder, exist_ok=True)
-    for f in os.listdir(folder):                 # 清掉上一次运行留下的旧编号
-        if re.match(r'^\d+组\.(jpg|pdf)$', f):
+    for f in os.listdir(folder):                 # 清掉上一次运行留下的旧图/旧 PDF
+        if f.lower().endswith(('.jpg', '.pdf')):
             os.remove(os.path.join(folder, f))
 
     made = []
+    used = set()
     idx = 0
     for i in kept:
         try:
@@ -518,7 +624,9 @@ def process_pdf(pdf, out_root, want_jpg=True, want_pdf=True):
             print('   跳过一张无法解码的图: %s' % exc)
             continue
         idx += 1
-        base = os.path.join(folder, '%d组' % idx)
+        shown = expand_template(name_tpl, idx, i['page'], pdf) if name_tpl else defaults_name(idx)
+        base_name = unique_base(folder, shown, used)
+        base = os.path.join(folder, base_name)
         jpg_path = base + '.jpg'
         if not changed and 'DCTDecode' in i['filt']:
             jpeg = i['raw']                       # 原样使用，零重压
@@ -531,7 +639,7 @@ def process_pdf(pdf, out_root, want_jpg=True, want_pdf=True):
                 f.write(jpeg)
         if want_pdf:
             build_pdf(jpeg, im.width, im.height, base + '.pdf')
-        made.append((idx, i['page'], im.width, im.height, changed))
+        made.append((base_name, i['page'], im.width, im.height, changed))
     return made, len(items) - len(kept), folder
 
 
@@ -625,12 +733,18 @@ def main(argv):
     if any(a in ('--menu',) for a in argv):
         print()
         print(MENU_TEXT)
+        saved = load_name_template()
+        if saved:
+            print('   当前文件名模板: %s' % saved)
+            print('   想恢复默认（1组、2组 ……）就单独输入一行  --name')
+            print()
         return 0
     if any(a in ('--bye',) for a in argv):
         print(BYE_TEXT)
         return 0
     if any(a in ('-h', '--help', '/?') for a in argv):
         print(MENU_TEXT)
+        print(NAME_HELP)
         banner()
         return 0
     if any(a in ('-v', '--version') for a in argv):
@@ -647,6 +761,8 @@ def main(argv):
     banner()
     want_jpg = '--pdf-only' not in argv
     want_pdf = '--jpg-only' not in argv
+    name_tpl = None
+    tpl_given = False
     out_root = None
     args = []
     i = 0
@@ -655,6 +771,13 @@ def main(argv):
         if a in ('-o', '--out'):
             i += 1
             out_root = argv[i] if i < len(argv) else None
+        elif a in ('--name', '-name'):
+            i += 1
+            name_tpl = argv[i] if i < len(argv) else None
+            tpl_given = True
+        elif a.startswith('--name='):
+            name_tpl = a.split('=', 1)[1]
+            tpl_given = True
         elif a in ('--jpg-only', '--pdf-only', '-nopause', '--quiet',
                    '--open', '--no-open',
                    '--interactive', '--from-list', '--list'):
@@ -662,6 +785,24 @@ def main(argv):
         else:
             args.append(a)
         i += 1
+    if name_tpl is not None and not name_tpl.strip():
+        name_tpl = None
+    if tpl_given:                                 # 这一行是“设置模板”，记住它
+        save_name_template(name_tpl or '')
+    else:
+        name_tpl = load_name_template() or None
+
+    if interactive and not args:
+        if tpl_given:
+            if name_tpl:
+                print('已保存文件名模板: %s' % name_tpl)
+                print('之后拖进来的 PDF 都用它；单独输入一行 --name 可恢复默认。')
+            else:
+                print('已恢复默认文件名：1组、2组、3组 ……')
+        else:
+            print('没有收到 PDF 路径。把 PDF 文件（或文件夹）拖进窗口再回车。')
+        print(END_HINT)
+        return 0 if tpl_given else 1
 
     pdfs, roots = collect_pdfs(args, (out_root,))
     if not args:
@@ -680,15 +821,18 @@ def main(argv):
     pdfs = [p for p in pdfs if not os.path.abspath(p).startswith(out_root + os.sep)]
 
     print('输出目录: %s' % out_root)
+    if name_tpl:
+        print('文件名模板: %s' % name_tpl)
     total = 0
     fail = 0
     for pdf in pdfs:
         try:
-            made, skipped, folder = process_pdf(pdf, out_root, want_jpg, want_pdf)
+            made, skipped, folder = process_pdf(pdf, out_root, want_jpg, want_pdf, name_tpl)
             total += len(made)
             print('\n[%s] %d 张 -> %s' % (os.path.basename(pdf), len(made), folder))
-            for idx, page, w, h, changed in made:
-                print('   %d组  第%d页  %dx%d%s' % (idx, page, w, h, '  已转正' if changed else ''))
+            for base_name, page, w, h, changed in made:
+                print('   %s.jpg  %s.pdf  第%d页  %dx%d%s'
+                      % (base_name, base_name, page, w, h, '  已转正' if changed else ''))
             if skipped:
                 print('   已跳过每页重复的模板图 %d 个' % skipped)
         except Exception as exc:
